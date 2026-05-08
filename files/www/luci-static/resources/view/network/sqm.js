@@ -273,6 +273,27 @@ return view.extend({
 		o.default  = '5000';
 		o.rmempty  = false;
 
+		o = s.option(form.ListValue, 'nightly_hour', _('Nightly calibration hour'),
+			_('Run an additional calibration at this hour each night (network is quiet, results are most accurate). Writes to /etc/crontabs/root.'));
+		o.value('disabled', _('Disabled'));
+		for (var h = 0; h < 24; h++)
+			o.value(String(h), (h < 10 ? '0' : '') + h + ':00');
+		o.default  = '3';
+		o.rmempty  = false;
+		o.write = function(section_id, value) {
+			var cron = '/etc/crontabs/root';
+			return fs.read(cron).then(function(content) {
+				content = (content || '').replace(/^.*\/etc\/sqm\/calibrate\.sh.*\n?/mg, '');
+				if (value !== 'disabled')
+					content = content.trimRight() + '\n0 ' + value + ' * * * /etc/sqm/calibrate.sh\n';
+				return fs.write(cron, content);
+			}).then(function() {
+				return fs.exec('/etc/init.d/cron', ['restart']).catch(function() {});
+			}).then(function() {
+				return uci.set('sqm', section_id, 'nightly_hour', value);
+			});
+		};
+
 		// Inject "Run Now" button + last result after form renders
 		var _lastResult = lastResult;
 		return m.render().then(L.bind(function(mapNode) {
