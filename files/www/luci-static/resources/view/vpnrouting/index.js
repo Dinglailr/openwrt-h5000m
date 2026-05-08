@@ -178,7 +178,6 @@ return view.extend({
 					href: '/cgi-bin/luci/admin/services/wireguard',
 					style: 'font-size:12px;color:#2980b9;text-decoration:none;font-weight:500'
 				}, ['Configure WireGuard →'])
-			]
 			])
 		]);
 
