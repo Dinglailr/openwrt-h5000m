@@ -1,0 +1,15 @@
+{
+  "luci-app-modem": {
+    "description": "Grant access to 5G modem AT command interface",
+    "read": {
+      "ubus": {
+        "luci.modem": ["status"]
+      }
+    },
+    "write": {
+      "ubus": {
+        "luci.modem": ["at_cmd"]
+      }
+    }
+  }
+}

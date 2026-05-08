@@ -1,0 +1,10 @@
+{
+  "admin/services/modem": {
+    "title": "5G Modem",
+    "order": 55,
+    "action": {
+      "type": "view",
+      "path": "modem/index"
+    }
+  }
+}

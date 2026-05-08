@@ -1,0 +1,214 @@
+#!/bin/sh
+AT_PORT=/dev/ttyUSB2
+LOCK=/var/lock/luci-modem.lock
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+_jstr() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+# Batch: open port once, drain 1s, send all cmds 1s apart, return raw dump
+_batch_at() {
+	local OUT PID
+	OUT=$(mktemp)
+	(
+		flock 9
+		cat "$AT_PORT" > "$OUT" 2>/dev/null &
+		PID=$!
+		sleep 1
+		for CMD in "$@"; do
+			printf '%s\r\n' "$CMD" > "$AT_PORT" 2>/dev/null
+			sleep 1
+		done
+		kill "$PID" 2>/dev/null
+		wait "$PID" 2>/dev/null
+	) 9>"$LOCK"
+	tr -d '\r' < "$OUT"
+	rm -f "$OUT"
+}
+
+# Single AT command: drain URCs first, then capture one clean response
+_send_at() {
+	local CMD="$1" OUT PID
+	OUT=$(mktemp)
+	(
+		flock 9
+		# Phase 1: drain buffered URCs for 1s
+		cat "$AT_PORT" > /dev/null 2>/dev/null &
+		PID=$!; sleep 1; kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
+		# Phase 2: capture fresh response
+		cat "$AT_PORT" > "$OUT" 2>/dev/null &
+		PID=$!
+		printf '%s\r\n' "$CMD" > "$AT_PORT" 2>/dev/null
+		sleep 1
+		kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
+	) 9>"$LOCK"
+	# Return lines up to and including first OK/ERROR
+	tr -d '\r' < "$OUT" | awk 'NF{print; if(/^(OK|ERROR|\+CME ERROR)/) exit}'
+	rm -f "$OUT"
+}
+
+_grep_val() {
+	# Extract value part after "+PREFIX: "
+	printf '%s\n' "$1" | grep -m1 "^+${2}:" | sed "s/^+${2}: *//"
+}
+
+_csv_field() {
+	# 1-based field from comma-separated, strip quotes
+	printf '%s' "$1" | cut -d',' -f"$2" | tr -d '"'
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────
+
+case "$1" in
+  list)
+	printf '{"status":{},"at_cmd":{"cmd":""}}\n'
+	;;
+  call)
+	case "$2" in
+
+	  status)
+		# Check port exists
+		[ -c "$AT_PORT" ] || {
+			printf '{"error":"port %s not found"}\n' "$AT_PORT"
+			exit 0
+		}
+
+		# Batch all status commands in one session
+		RAW=$(_batch_at \
+			"ATI" \
+			"AT+CGSN" \
+			"AT+CPIN?" \
+			"AT+QCCID" \
+			"AT+CIMI" \
+			"AT+COPS?" \
+			"AT+QCSQ" \
+			"AT+QNWINFO" \
+			"AT+CEREG?" \
+			"AT+C5GREG?" \
+			"AT+CGPADDR=1" \
+			"AT+QTEMP" \
+		)
+
+		# Parse module info
+		MANUFACTURER=$(printf '%s\n' "$RAW" | grep -m1 '^Quectel' || echo "Quectel")
+		MODEL=$(printf '%s\n' "$RAW" | grep -m1 '^RM[0-9A-Z]')
+		REVISION=$(printf '%s\n' "$RAW" | grep -m1 '^Revision:' | sed 's/^Revision: *//')
+		IMEI=$(printf '%s\n' "$RAW" | grep -m1 '^[0-9]\{15\}$')
+
+		# SIM
+		CPIN_RAW=$(_grep_val "$RAW" "CPIN")
+		[ -z "$CPIN_RAW" ] && CPIN_RAW="NOT INSERTED"
+		ICCID=$(printf '%s\n' "$RAW" | grep -m1 '^+QCCID:' | sed 's/^+QCCID: *//')
+		IMSI=$(printf '%s\n' "$RAW" | grep -m1 '^[0-9]\{14,15\}$' | grep -v "$IMEI")
+
+		# Network — +COPS: mode[,format,"operator",AcT]
+		COPS_RAW=$(_grep_val "$RAW" "COPS")
+		# Only fields 3 and 4 matter; if no SIM, response is just "0" (mode only)
+		OPERATOR=$(_csv_field "$COPS_RAW" 3)
+		ACT_CODE=$(_csv_field "$COPS_RAW" 4)
+		# Discard if operator looks like a raw mode/format code (single digit or empty)
+		echo "$OPERATOR" | grep -qE '^[0-9]?$' && OPERATOR=""
+		case "$ACT_CODE" in
+			0)  ACT="GSM" ;;
+			2)  ACT="UMTS" ;;
+			3)  ACT="EDGE" ;;
+			4)  ACT="HSDPA" ;;
+			6)  ACT="HSPA+" ;;
+			7)  ACT="LTE" ;;
+			10) ACT="NR5G-SA" ;;
+			11) ACT="NR5G-NSA" ;;
+			13) ACT="NR5G-SA" ;;
+			*)  ACT="" ;;
+		esac
+
+		# Prefer QNWINFO for technology/band (more accurate than COPS AcT)
+		QNWINFO_RAW=$(_grep_val "$RAW" "QNWINFO")
+		NWTYPE=$(_csv_field "$QNWINFO_RAW" 1)
+		BAND=$(_csv_field "$QNWINFO_RAW" 3)
+		EARFCN=$(_csv_field "$QNWINFO_RAW" 4)
+		# Use QNWINFO tech if available, fall back to COPS AcT
+		[ -n "$NWTYPE" ] && [ "$NWTYPE" != "No Service" ] && ACT="$NWTYPE"
+		[ "$BAND" = "No Service" ] && BAND=""
+		[ "$EARFCN" = "No Service" ] && EARFCN=""
+
+		# Registration
+		CEREG_RAW=$(_grep_val "$RAW" "CEREG")
+		CEREG_STAT=$(_csv_field "$CEREG_RAW" 2)
+		C5GREG_RAW=$(_grep_val "$RAW" "C5GREG")
+		C5GREG_STAT=$(_csv_field "$C5GREG_RAW" 2)
+		case "$C5GREG_STAT" in
+			1|5) REG_STATUS="Registered" ;;
+			2)   REG_STATUS="Searching" ;;
+			3)   REG_STATUS="Denied" ;;
+			*)
+				case "$CEREG_STAT" in
+					1|5) REG_STATUS="Registered (LTE)" ;;
+					2)   REG_STATUS="Searching" ;;
+					3)   REG_STATUS="Denied" ;;
+					*)   REG_STATUS="Not Registered" ;;
+				esac
+				;;
+		esac
+
+		# Signal — +QCSQ: "tech",rssi,rsrp,sinr,rsrq
+		QCSQ_RAW=$(_grep_val "$RAW" "QCSQ")
+		SIG_TECH=$(_csv_field "$QCSQ_RAW" 1)
+		if [ "$SIG_TECH" = "NOSERVICE" ] || [ -z "$SIG_TECH" ]; then
+			RSSI=""; RSRP=""; SINR=""; RSRQ=""
+		else
+			RSSI=$(_csv_field "$QCSQ_RAW" 2)
+			RSRP=$(_csv_field "$QCSQ_RAW" 3)
+			SINR=$(_csv_field "$QCSQ_RAW" 4)
+			RSRQ=$(_csv_field "$QCSQ_RAW" 5)
+		fi
+
+		# Connection
+		CGPADDR_RAW=$(_grep_val "$RAW" "CGPADDR")
+		IP_ADDR=$(_csv_field "$CGPADDR_RAW" 2)
+
+		# Temperature — multiple +QTEMP lines
+		TEMP_MODEM=$(printf '%s\n' "$RAW" | grep '+QTEMP:' | grep -i 'md-modem\|modem' | head -1 | sed 's/.*,"//' | tr -d '"')
+		TEMP_CPU=$(printf '%s\n' "$RAW" | grep '+QTEMP:' | grep -i 'ap-apcpu\|cpu' | head -1 | sed 's/.*,"//' | tr -d '"')
+
+		printf '{"port":"%s","manufacturer":"%s","model":"%s","revision":"%s","imei":"%s","sim_status":"%s","iccid":"%s","imsi":"%s","operator":"%s","technology":"%s","band":"%s","earfcn":"%s","registration":"%s","rssi":"%s","rsrp":"%s","sinr":"%s","rsrq":"%s","ip":"%s","temp_modem":"%s","temp_cpu":"%s"}\n' \
+			"$(_jstr "$AT_PORT")" \
+			"$(_jstr "$MANUFACTURER")" \
+			"$(_jstr "$MODEL")" \
+			"$(_jstr "$REVISION")" \
+			"$(_jstr "$IMEI")" \
+			"$(_jstr "$CPIN_RAW")" \
+			"$(_jstr "$ICCID")" \
+			"$(_jstr "$IMSI")" \
+			"$(_jstr "$OPERATOR")" \
+			"$(_jstr "$ACT")" \
+			"$(_jstr "$BAND")" \
+			"$(_jstr "$EARFCN")" \
+			"$(_jstr "$REG_STATUS")" \
+			"$(_jstr "$RSSI")" \
+			"$(_jstr "$RSRP")" \
+			"$(_jstr "$SINR")" \
+			"$(_jstr "$RSRQ")" \
+			"$(_jstr "$IP_ADDR")" \
+			"$(_jstr "$TEMP_MODEM")" \
+			"$(_jstr "$TEMP_CPU")"
+		;;
+
+	  at_cmd)
+		INPUT=$(cat)
+		CMD=$(printf '%s' "$INPUT" | jsonfilter -e '@.cmd' 2>/dev/null)
+		# Sanitize: printable ASCII, no shell metacharacters
+		CMD=$(printf '%s' "$CMD" | sed 's/[;&|`$<>\\]//g' | tr -d '\001-\011\013-\037\177' | cut -c1-128)
+		[ -z "$CMD" ] && { printf '{"error":"empty command"}\n'; exit 0; }
+		[ -c "$AT_PORT" ] || { printf '{"error":"port not found"}\n'; exit 0; }
+
+		RESP=$(_send_at "$CMD")
+		printf '{"cmd":"%s","response":"%s"}\n' \
+			"$(_jstr "$CMD")" \
+			"$(_jstr "$RESP")"
+		;;
+
+	esac
+	;;
+esac
