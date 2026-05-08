@@ -1,0 +1,5 @@
+#!/bin/sh
+[ "$ACTION" = "ifup" ] && [ "$INTERFACE" = "lan" ] && {
+    sleep 2
+    /etc/xray/tproxy-rules.sh add >/dev/null 2>&1
+}

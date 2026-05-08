@@ -1,0 +1,13 @@
+{
+  "admin/services/vpnrouting": {
+    "title": "VPN Routing",
+    "order": 60,
+    "action": {
+      "type": "view",
+      "path": "vpnrouting/index"
+    },
+    "depends": {
+      "acl": ["luci-app-vpnrouting"]
+    }
+  }
+}

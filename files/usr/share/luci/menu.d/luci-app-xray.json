@@ -1,0 +1,10 @@
+{
+  "admin/services/xray": {
+    "title": "Xray VPN",
+    "order": 65,
+    "action": {
+      "type": "view",
+      "path": "xray/index"
+    }
+  }
+}

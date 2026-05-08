@@ -1,0 +1,2 @@
+# Nightly SQM re-calibration at 3 AM — network is quiet, result is most accurate
+0 3 * * * /etc/sqm/calibrate.sh eth0

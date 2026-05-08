@@ -1,0 +1,263 @@
+#!/bin/sh
+
+PROFILES_DIR=/etc/xray/profiles
+ACTIVE_FILE=/etc/xray/active
+CONFIG_FILE=/etc/xray/config.json
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+_pid_running() {
+  local pid=""
+  if [ -f /var/run/xray.pid ]; then
+    pid=$(cat /var/run/xray.pid 2>/dev/null)
+    kill -0 "$pid" 2>/dev/null || { rm -f /var/run/xray.pid; pid=""; }
+  fi
+  echo "$pid"
+}
+
+_to_json_array() {
+  # "geoip:cn,geoip:private" → ["geoip:cn","geoip:private"]
+  local items
+  items=$(echo "$1" | tr ',' '\n' | grep -v '^$' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')
+  printf '[%s]' "$items"
+}
+
+_safe_id() {
+  # busybox-compatible: lowercase, replace non-alphanumeric with dash, collapse, trim, cap at 48
+  echo "$1" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz' | \
+    sed 's/[^a-z0-9_]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-48
+}
+
+_safe_file_id() {
+  # strip chars unsafe in filenames; keep alphanumeric, dash, underscore, dot
+  echo "$1" | sed 's/[^a-zA-Z0-9._-]//g'
+}
+
+_read_active() {
+  # tr -d with explicit chars (busybox doesn't support [:space:] class in tr)
+  cat "$ACTIVE_FILE" 2>/dev/null | tr -d ' \t\r\n'
+}
+
+_write_config() {
+  # $1=addr $2=port $3=uuid $4=sni $5=fp $6=pubkey $7=shortid $8=direct_ip $9=direct_domain
+  local dir_ip="$8" dir_dom="$9" ip_arr dom_arr
+  [ -z "$dir_ip" ]  && dir_ip="geoip:private,geoip:cn"
+  [ -z "$dir_dom" ] && dir_dom="geosite:cn"
+  ip_arr=$(_to_json_array "$dir_ip")
+  dom_arr=$(_to_json_array "$dir_dom")
+  mkdir -p /etc/xray
+  printf '{
+  "log":{"loglevel":"warning"},
+  "inbounds":[
+    {"tag":"tproxy-in","port":12345,"protocol":"dokodemo-door",
+     "settings":{"network":"tcp,udp","followRedirect":true},
+     "streamSettings":{"sockopt":{"tproxy":"tproxy","mark":255}}},
+    {"tag":"socks-in","port":1080,"protocol":"socks",
+     "settings":{"auth":"noauth","udp":true}}
+  ],
+  "outbounds":[
+    {"tag":"vless-reality","protocol":"vless",
+     "settings":{"vnext":[{"address":"%s","port":%s,
+       "users":[{"id":"%s","flow":"xtls-rprx-vision","encryption":"none"}]}]},
+     "streamSettings":{"network":"tcp","security":"reality",
+       "realitySettings":{"serverName":"%s","fingerprint":"%s",
+         "publicKey":"%s","shortId":"%s","spiderX":"/"},
+       "sockopt":{"mark":255}}},
+    {"tag":"direct","protocol":"freedom","settings":{"domainStrategy":"UseIP"}},
+    {"tag":"block","protocol":"blackhole"}
+  ],
+  "routing":{"domainStrategy":"IPIfNonMatch","rules":[
+    {"type":"field","outboundTag":"direct","ip":%s},
+    {"type":"field","outboundTag":"direct","domain":%s},
+    {"type":"field","outboundTag":"vless-reality","network":"tcp,udp"}
+  ]}
+}\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$ip_arr" "$dom_arr" > "$CONFIG_FILE"
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────
+
+case "$1" in
+  list)
+    echo '{"status":{},"enable":{},"disable":{},"get_exit_ip":{},
+      "list_profiles":{},
+      "get_profile":{"id":""},
+      "save_profile":{"id":"","name":"","address":"","port":0,"uuid":"","public_key":"","short_id":"","server_name":"","fingerprint":"","direct_ip":"","direct_domain":""},
+      "delete_profile":{"id":""},
+      "activate_profile":{"id":""}}'
+    ;;
+  call)
+    case "$2" in
+
+      status)
+        PID=$(_pid_running)
+        TPROXY=$(nft list table inet xray_tproxy 2>/dev/null | grep -c tproxy 2>/dev/null || echo 0)
+        RUNNING=false; [ -n "$PID" ] && RUNNING=true
+        TPROXY_ON=false; [ "$TPROXY" -gt 0 ] && TPROXY_ON=true
+        ACTIVE=$(_read_active)
+        ACTIVE_NAME=""
+        [ -n "$ACTIVE" ] && [ -f "$PROFILES_DIR/$ACTIVE.json" ] && \
+          ACTIVE_NAME=$(jsonfilter -i "$PROFILES_DIR/$ACTIVE.json" -e '@.name' 2>/dev/null)
+        HAS_PROFILES=false
+        ls "$PROFILES_DIR"/*.json >/dev/null 2>&1 && HAS_PROFILES=true
+        printf '{"running":%s,"tproxy":%s,"pid":"%s","active_profile":"%s","active_name":"%s","has_profiles":%s}\n' \
+          "$RUNNING" "$TPROXY_ON" "$PID" "$ACTIVE" "$ACTIVE_NAME" "$HAS_PROFILES"
+        ;;
+
+      enable)
+        if [ -f /var/run/xray.pid ]; then
+          kill "$(cat /var/run/xray.pid 2>/dev/null)" 2>/dev/null
+          rm -f /var/run/xray.pid; sleep 1
+        fi
+        [ ! -f "$CONFIG_FILE" ] && { echo '{"error":"No active profile. Activate a profile first."}'; exit 0; }
+        export XRAY_LOCATION_ASSET=/usr/bin
+        /usr/bin/xray run -config "$CONFIG_FILE" >/tmp/xray.log 2>&1 &
+        echo $! > /var/run/xray.pid
+        sleep 3
+        /etc/xray/tproxy-rules.sh add >/dev/null 2>&1
+        touch /etc/xray/autostart
+        echo '{"result":"ok"}'
+        ;;
+
+      disable)
+        /etc/xray/tproxy-rules.sh del >/dev/null 2>&1
+        if [ -f /var/run/xray.pid ]; then
+          kill "$(cat /var/run/xray.pid 2>/dev/null)" 2>/dev/null
+          rm -f /var/run/xray.pid
+        fi
+        pkill -x xray 2>/dev/null
+        rm -f /etc/xray/autostart
+        echo '{"result":"ok"}'
+        ;;
+
+      get_exit_ip)
+        IP=$(curl -s -x socks5h://127.0.0.1:1080 --connect-timeout 10 --max-time 15 https://ipinfo.io/ip 2>/dev/null | tr -d ' \t\r\n')
+        [ -z "$IP" ] && IP="unavailable"
+        printf '{"ip":"%s"}\n' "$IP"
+        ;;
+
+      list_profiles)
+        mkdir -p "$PROFILES_DIR"
+        ACTIVE=$(_read_active)
+        printf '{"profiles":['
+        SEP=""
+        for f in "$PROFILES_DIR"/*.json; do
+          [ -f "$f" ] || continue
+          ID=$(basename "$f" .json)
+          NAME=$(jsonfilter -i "$f" -e '@.name'    2>/dev/null || echo "$ID")
+          ADDR=$(jsonfilter -i "$f" -e '@.address' 2>/dev/null || echo "")
+          PORT=$(jsonfilter -i "$f" -e '@.port'    2>/dev/null || echo "443")
+          IS_ACTIVE=false; [ "$ID" = "$ACTIVE" ] && IS_ACTIVE=true
+          printf '%s{"id":"%s","name":"%s","address":"%s","port":%s,"active":%s}' \
+            "$SEP" "$ID" "$NAME" "$ADDR" "$PORT" "$IS_ACTIVE"
+          SEP=","
+        done
+        printf ']}\n'
+        ;;
+
+      get_profile)
+        INPUT=$(cat)
+        ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
+        FILE="$PROFILES_DIR/${ID}.json"
+        [ -f "$FILE" ] || { echo '{"error":"not found"}'; exit 0; }
+        cat "$FILE"
+        ;;
+
+      save_profile)
+        INPUT=$(cat)
+        NAME=$(echo   "$INPUT" | jsonfilter -e '@.name'          2>/dev/null)
+        ADDR=$(echo   "$INPUT" | jsonfilter -e '@.address'       2>/dev/null)
+        PORT=$(echo   "$INPUT" | jsonfilter -e '@.port'          2>/dev/null)
+        UUID=$(echo   "$INPUT" | jsonfilter -e '@.uuid'          2>/dev/null)
+        PUBKEY=$(echo "$INPUT" | jsonfilter -e '@.public_key'    2>/dev/null)
+        SHORTID=$(echo "$INPUT"| jsonfilter -e '@.short_id'      2>/dev/null)
+        SNI=$(echo    "$INPUT" | jsonfilter -e '@.server_name'   2>/dev/null)
+        FP=$(echo     "$INPUT" | jsonfilter -e '@.fingerprint'   2>/dev/null)
+        DIRIP=$(echo  "$INPUT" | jsonfilter -e '@.direct_ip'     2>/dev/null)
+        DIRDOM=$(echo "$INPUT" | jsonfilter -e '@.direct_domain' 2>/dev/null)
+        ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
+
+        [ -z "$NAME" ] || [ -z "$ADDR" ] || [ -z "$UUID" ] || [ -z "$PUBKEY" ] || [ -z "$SHORTID" ] && {
+          echo '{"error":"name, address, uuid, public_key and short_id are required"}'; exit 0
+        }
+        [ -z "$PORT" ]   && PORT=443
+        [ -z "$SNI" ]    && SNI="www.microsoft.com"
+        [ -z "$FP" ]     && FP="chrome"
+        [ -z "$DIRIP" ]  && DIRIP="geoip:private,geoip:cn"
+        [ -z "$DIRDOM" ] && DIRDOM="geosite:cn"
+        [ -z "$ID" ]     && ID=$(_safe_id "$NAME")
+        [ -z "$ID" ]     && ID="profile-$(date +%s)"
+
+        mkdir -p "$PROFILES_DIR"
+        printf '{"name":"%s","address":"%s","port":%s,"uuid":"%s","public_key":"%s","short_id":"%s","server_name":"%s","fingerprint":"%s","direct_ip":"%s","direct_domain":"%s"}\n' \
+          "$NAME" "$ADDR" "$PORT" "$UUID" "$PUBKEY" "$SHORTID" "$SNI" "$FP" "$DIRIP" "$DIRDOM" \
+          > "$PROFILES_DIR/${ID}.json"
+
+        # auto-activate if first profile or none active
+        ACTIVE=$(_read_active)
+        COUNT=$(ls "$PROFILES_DIR"/*.json 2>/dev/null | wc -l)
+        if [ -z "$ACTIVE" ] || [ "$COUNT" -eq 1 ]; then
+          printf '%s' "$ID" > "$ACTIVE_FILE"
+          _write_config "$ADDR" "$PORT" "$UUID" "$SNI" "$FP" "$PUBKEY" "$SHORTID" "$DIRIP" "$DIRDOM"
+        fi
+
+        printf '{"result":"ok","id":"%s"}\n' "$ID"
+        ;;
+
+      delete_profile)
+        INPUT=$(cat)
+        ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
+        FILE="$PROFILES_DIR/${ID}.json"
+        [ -f "$FILE" ] || { echo '{"error":"not found"}'; exit 0; }
+        rm -f "$FILE"
+        ACTIVE=$(_read_active)
+        if [ "$ACTIVE" = "$ID" ]; then
+          rm -f "$ACTIVE_FILE" "$CONFIG_FILE"
+        fi
+        echo '{"result":"ok"}'
+        ;;
+
+      activate_profile)
+        INPUT=$(cat)
+        ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
+        FILE="$PROFILES_DIR/${ID}.json"
+        [ -f "$FILE" ] || { echo '{"error":"not found"}'; exit 0; }
+
+        ADDR=$(jsonfilter -i "$FILE" -e '@.address'      2>/dev/null)
+        PORT=$(jsonfilter -i "$FILE" -e '@.port'         2>/dev/null)
+        UUID=$(jsonfilter -i "$FILE" -e '@.uuid'         2>/dev/null)
+        PUBKEY=$(jsonfilter -i "$FILE" -e '@.public_key'   2>/dev/null)
+        SHORTID=$(jsonfilter -i "$FILE" -e '@.short_id'    2>/dev/null)
+        SNI=$(jsonfilter -i "$FILE" -e '@.server_name'   2>/dev/null)
+        FP=$(jsonfilter -i "$FILE" -e '@.fingerprint'    2>/dev/null)
+        DIRIP=$(jsonfilter -i "$FILE" -e '@.direct_ip'   2>/dev/null)
+        DIRDOM=$(jsonfilter -i "$FILE" -e '@.direct_domain' 2>/dev/null)
+        [ -z "$PORT" ]   && PORT=443
+        [ -z "$SNI" ]    && SNI="www.microsoft.com"
+        [ -z "$FP" ]     && FP="chrome"
+        [ -z "$DIRIP" ]  && DIRIP="geoip:private,geoip:cn"
+        [ -z "$DIRDOM" ] && DIRDOM="geosite:cn"
+
+        _write_config "$ADDR" "$PORT" "$UUID" "$SNI" "$FP" "$PUBKEY" "$SHORTID" "$DIRIP" "$DIRDOM"
+        printf '%s' "$ID" > "$ACTIVE_FILE"
+
+        # if xray is running, restart it immediately with the new config
+        PID=$(_pid_running)
+        if [ -n "$PID" ]; then
+          kill "$PID" 2>/dev/null
+          rm -f /var/run/xray.pid
+          sleep 1
+          /etc/xray/tproxy-rules.sh del >/dev/null 2>&1
+          export XRAY_LOCATION_ASSET=/usr/bin
+          /usr/bin/xray run -config "$CONFIG_FILE" >/tmp/xray.log 2>&1 &
+          echo $! > /var/run/xray.pid
+          sleep 3
+          /etc/xray/tproxy-rules.sh add >/dev/null 2>&1
+          echo '{"result":"ok","restarted":true}'
+        else
+          echo '{"result":"ok","restarted":false}'
+        fi
+        ;;
+
+    esac
+    ;;
+esac

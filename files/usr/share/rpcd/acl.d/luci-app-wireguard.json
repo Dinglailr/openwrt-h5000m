@@ -1,0 +1,15 @@
+{
+  "luci-app-wireguard": {
+    "description": "Grant access to WireGuard ubus control",
+    "read": {
+      "ubus": {
+        "luci.wireguard": ["status", "list_profiles", "get_profile"]
+      }
+    },
+    "write": {
+      "ubus": {
+        "luci.wireguard": ["enable", "disable", "save_profile", "delete_profile", "activate_profile"]
+      }
+    }
+  }
+}

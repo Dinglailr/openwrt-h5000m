@@ -1,0 +1,15 @@
+{
+  "luci-app-vpnrouting": {
+    "description": "Grant access to VPN Routing ubus control",
+    "read": {
+      "ubus": {
+        "luci.vpnrouting": ["get_state", "get_exit_ips", "get_rules", "test_route"]
+      }
+    },
+    "write": {
+      "ubus": {
+        "luci.vpnrouting": ["apply_mode", "confirm_mode", "save_rules"]
+      }
+    }
+  }
+}

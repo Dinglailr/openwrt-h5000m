@@ -1,0 +1,6 @@
+#!/bin/sh
+# Re-calibrate SQM whenever the WAN comes up (new location = new line speed)
+[ "$ACTION" = "ifup" ] && [ "$INTERFACE" = "wan" ] && {
+    # Wait for routing to settle, then calibrate in background
+    (sleep 10 && /etc/sqm/calibrate.sh eth0) &
+}

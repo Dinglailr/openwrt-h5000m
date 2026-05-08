@@ -1,0 +1,314 @@
+#!/bin/sh
+
+UCI_CONF=vpnrouting
+WG_IFACE=wg0
+XRAY_PID=/var/run/xray.pid
+ROLLBACK_PID=/var/run/vpnrouting-rollback.pid
+ROLLBACK_AT=/var/run/vpnrouting-rollback.at
+CUSTOM_BYPASS=/etc/xray/custom-bypass
+CUSTOM_ROUTES=/var/run/vpnrouting-custom-routes
+XRAY_CONFIG=/etc/xray/config.json
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+_xray_pid() {
+  local pid=""
+  [ -f "$XRAY_PID" ] || { echo ""; return; }
+  pid=$(cat "$XRAY_PID" 2>/dev/null)
+  kill -0 "$pid" 2>/dev/null && echo "$pid" || { rm -f "$XRAY_PID"; echo ""; }
+}
+
+_tproxy_count() {
+  nft list table inet xray_tproxy 2>/dev/null | grep -c tproxy 2>/dev/null || echo 0
+}
+
+_wg_handshake_age() {
+  local hs now
+  hs=$(wg show "$WG_IFACE" latest-handshakes 2>/dev/null | awk '{print $2}')
+  [ -z "$hs" ] || [ "$hs" = "0" ] && { echo -1; return; }
+  now=$(date +%s)
+  echo $(( now - hs ))
+}
+
+_wg_connected() {
+  local age
+  age=$(_wg_handshake_age)
+  [ "$age" -ge 0 ] && [ "$age" -lt 180 ] && echo "true" || echo "false"
+}
+
+_wg_tx() { cat /sys/class/net/$WG_IFACE/statistics/tx_bytes 2>/dev/null || echo 0; }
+_wg_rx() { cat /sys/class/net/$WG_IFACE/statistics/rx_bytes 2>/dev/null || echo 0; }
+
+_wg_endpoint() {
+  wg show "$WG_IFACE" endpoints 2>/dev/null | awk '{print $2}' | head -1
+}
+
+_lan_cidr() {
+  ip addr show br-lan 2>/dev/null | grep "inet " | awk '{print $2}' | head -1
+}
+
+_get_mode() {
+  uci -q get "$UCI_CONF.routing.mode" 2>/dev/null || echo "split"
+}
+
+_rollback_remaining() {
+  local pid at now rem
+  [ -f "$ROLLBACK_PID" ] || { echo 0; return; }
+  pid=$(cat "$ROLLBACK_PID" 2>/dev/null)
+  kill -0 "$pid" 2>/dev/null || { echo 0; return; }
+  at=$(cat "$ROLLBACK_AT" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  rem=$(( at - now ))
+  [ "$rem" -lt 0 ] && rem=0
+  echo "$rem"
+}
+
+_active_xray_name() {
+  local id
+  id=$(cat /etc/xray/active 2>/dev/null | tr -d ' \t\r\n')
+  [ -z "$id" ] && { echo ""; return; }
+  [ -f "/etc/xray/profiles/${id}.json" ] || { echo ""; return; }
+  jsonfilter -i "/etc/xray/profiles/${id}.json" -e '@.name' 2>/dev/null
+}
+
+# Extract geo entries from Xray config direct-outbound rules (e.g. geoip:cn,geosite:cn)
+_xray_bypass_labels() {
+  local out
+  [ -f "$XRAY_CONFIG" ] || { echo ""; return; }
+  out=$(grep -o '"geoip:[a-z]*"\|"geosite:[a-z]*"' "$XRAY_CONFIG" 2>/dev/null | \
+    tr -d '"' | sort -u | tr '\n' ',' | sed 's/,$//')
+  echo "$out"
+}
+
+# ── custom rules ──────────────────────────────────────────────────────────────
+
+_flush_custom_routes() {
+  [ -f "$CUSTOM_ROUTES" ] && while IFS= read -r cidr; do
+    ip route del "$cidr" dev "$WG_IFACE" 2>/dev/null
+  done < "$CUSTOM_ROUTES"
+  rm -f "$CUSTOM_ROUTES"
+}
+
+_apply_custom_rules() {
+  local ri rdest rvia renabled
+  _flush_custom_routes
+  rm -f "$CUSTOM_BYPASS"
+  ri=0
+  while uci -q get "$UCI_CONF.@rule[$ri]" >/dev/null 2>&1; do
+    rdest=$(uci -q get    "$UCI_CONF.@rule[$ri].dest"    2>/dev/null)
+    rvia=$(uci -q get     "$UCI_CONF.@rule[$ri].via"     2>/dev/null)
+    renabled=$(uci -q get "$UCI_CONF.@rule[$ri].enabled" 2>/dev/null)
+    # Skip disabled rules (enabled defaults to 1 if absent)
+    if [ -n "$rdest" ] && [ "$renabled" != "0" ]; then
+      echo "$rdest" >> "$CUSTOM_BYPASS"
+      [ "$rvia" = "wg" ] && ip route replace "$rdest" dev "$WG_IFACE" 2>/dev/null && \
+        echo "$rdest" >> "$CUSTOM_ROUTES"
+    fi
+    ri=$(( ri + 1 ))
+  done
+  local t
+  t=$(_tproxy_count)
+  [ "$t" -gt 0 ] && /etc/xray/tproxy-rules.sh add >/dev/null 2>&1
+}
+
+# ── routing actions ───────────────────────────────────────────────────────────
+
+_apply_split() {
+  local t
+  t=$(_tproxy_count)
+  [ "$t" -eq 0 ] && /etc/xray/tproxy-rules.sh add >/dev/null 2>&1
+  ip route del default dev "$WG_IFACE" 2>/dev/null
+}
+
+_apply_xray_only() {
+  local t
+  t=$(_tproxy_count)
+  [ "$t" -eq 0 ] && /etc/xray/tproxy-rules.sh add >/dev/null 2>&1
+  ip route del default dev "$WG_IFACE" 2>/dev/null
+}
+
+_apply_wg_only() {
+  /etc/xray/tproxy-rules.sh del >/dev/null 2>&1
+  ip route add default dev "$WG_IFACE" 2>/dev/null
+}
+
+_apply_direct() {
+  /etc/xray/tproxy-rules.sh del >/dev/null 2>&1
+  ip route del default dev "$WG_IFACE" 2>/dev/null
+}
+
+_apply_mode_routing() {
+  case "$1" in
+    split)     _apply_split ;;
+    xray_only) _apply_xray_only ;;
+    wg_only)   _apply_wg_only ;;
+    direct)    _apply_direct ;;
+  esac
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+case "$1" in
+  list)
+    echo '{"get_state":{},"get_exit_ips":{},"apply_mode":{"mode":""},"confirm_mode":{},"get_rules":{},"save_rules":{"rules":[]},"test_route":{"ip":""}}'
+    ;;
+  call)
+    case "$2" in
+
+      get_state)
+        XRAY_PID_VAL=$(_xray_pid)
+        XRAY_RUN=false; [ -n "$XRAY_PID_VAL" ] && XRAY_RUN=true
+        TPROXY=$(_tproxy_count)
+        TPROXY_ON=false; [ "$TPROXY" -gt 0 ] && TPROXY_ON=true
+        XRAY_NAME=$(_active_xray_name)
+        XRAY_BYPASS=$(_xray_bypass_labels)
+
+        WG_CONN=$(_wg_connected)
+        WG_AGE=$(_wg_handshake_age)
+        WG_EP=$(_wg_endpoint)
+        [ -z "$WG_EP" ] && WG_EP="unknown"
+        WG_TX=$(_wg_tx)
+        WG_RX=$(_wg_rx)
+        WG_DEF=$(ip route show dev "$WG_IFACE" 2>/dev/null | grep -c "^default"; true)
+
+        LAN=$(_lan_cidr)
+        [ -z "$LAN" ] && LAN="192.168.1.0/24"
+        MODE=$(_get_mode)
+        ROLLBACK=$(_rollback_remaining)
+
+        HEALTH="healthy"
+        case "$MODE" in
+          split)
+            { [ "$XRAY_RUN" = "false" ] || [ "$WG_CONN" = "false" ]; } && HEALTH="degraded"
+            ;;
+          xray_only)
+            [ "$XRAY_RUN" = "false" ] && HEALTH="broken"
+            ;;
+          wg_only)
+            [ "$WG_CONN" = "false" ] && HEALTH="broken"
+            ;;
+        esac
+
+        printf '{"xray":{"running":%s,"tproxy":%s,"active_name":"%s","pid":"%s","bypass":"%s"},"wg":{"connected":%s,"handshake_age":%s,"endpoint":"%s","tx":%s,"rx":%s,"default_route":%s},"lan":"%s","mode":"%s","health":"%s","rollback_remaining":%s}\n' \
+          "$XRAY_RUN" "$TPROXY_ON" "$XRAY_NAME" "$XRAY_PID_VAL" "$XRAY_BYPASS" \
+          "$WG_CONN" "$WG_AGE" "$WG_EP" "$WG_TX" "$WG_RX" "$WG_DEF" \
+          "$LAN" "$MODE" "$HEALTH" "$ROLLBACK"
+        ;;
+
+      get_exit_ips)
+        ISP_FILE=$(mktemp); XRAY_FILE=$(mktemp)
+        curl -s --connect-timeout 10 --max-time 15 https://ipinfo.io/ip \
+          > "$ISP_FILE" 2>/dev/null &
+        curl -s -x socks5h://127.0.0.1:1080 --connect-timeout 10 --max-time 15 https://ipinfo.io/ip \
+          > "$XRAY_FILE" 2>/dev/null &
+        wait
+        ISP_IP=$(tr -d ' \t\r\n' < "$ISP_FILE"); rm -f "$ISP_FILE"
+        XRAY_IP=$(tr -d ' \t\r\n' < "$XRAY_FILE"); rm -f "$XRAY_FILE"
+        [ -z "$ISP_IP" ]  && ISP_IP="unavailable"
+        [ -z "$XRAY_IP" ] && XRAY_IP="unavailable"
+        printf '{"isp":"%s","xray":"%s"}\n' "$ISP_IP" "$XRAY_IP"
+        ;;
+
+      apply_mode)
+        INPUT=$(cat)
+        MODE=$(echo "$INPUT" | jsonfilter -e '@.mode' 2>/dev/null)
+        case "$MODE" in
+          split|xray_only|wg_only|direct) ;;
+          *) echo '{"error":"invalid mode"}'; exit 0 ;;
+        esac
+
+        OLD_PID=$(cat "$ROLLBACK_PID" 2>/dev/null)
+        [ -n "$OLD_PID" ] && kill "$OLD_PID" 2>/dev/null
+        rm -f "$ROLLBACK_PID" "$ROLLBACK_AT"
+
+        PREV_MODE=$(_get_mode)
+        _apply_mode_routing "$MODE"
+
+        uci -q set "$UCI_CONF.routing=routing"
+        uci set "$UCI_CONF.routing.mode=$MODE"
+        uci commit "$UCI_CONF"
+
+        NEEDS_CONFIRM=false
+        TS=0
+        if [ "$MODE" = "wg_only" ] || [ "$MODE" = "direct" ]; then
+          NEEDS_CONFIRM=true
+          TS=$(( $(date +%s) + 60 ))
+          printf '%s' "$TS" > "$ROLLBACK_AT"
+          (
+            sleep 60
+            uci -q set "$UCI_CONF.routing=routing"
+            uci set "$UCI_CONF.routing.mode=$PREV_MODE"
+            uci commit "$UCI_CONF"
+            _apply_mode_routing "$PREV_MODE"
+            rm -f "$ROLLBACK_PID" "$ROLLBACK_AT"
+          ) &
+          echo $! > "$ROLLBACK_PID"
+        fi
+
+        printf '{"result":"ok","mode":"%s","needs_confirm":%s,"rollback_at":%s}\n' \
+          "$MODE" "$NEEDS_CONFIRM" "$TS"
+        ;;
+
+      confirm_mode)
+        PID=$(cat "$ROLLBACK_PID" 2>/dev/null)
+        [ -n "$PID" ] && kill "$PID" 2>/dev/null
+        rm -f "$ROLLBACK_PID" "$ROLLBACK_AT"
+        echo '{"result":"ok"}'
+        ;;
+
+      get_rules)
+        GR_SEP=""
+        GR_I=0
+        printf '{"rules":['
+        while uci -q get "$UCI_CONF.@rule[$GR_I]" >/dev/null 2>&1; do
+          GR_DEST=$(uci -q get    "$UCI_CONF.@rule[$GR_I].dest"    2>/dev/null)
+          GR_VIA=$(uci -q get     "$UCI_CONF.@rule[$GR_I].via"     2>/dev/null)
+          GR_EN=$(uci -q get      "$UCI_CONF.@rule[$GR_I].enabled" 2>/dev/null)
+          [ "$GR_EN" = "0" ] && GR_EN_BOOL=false || GR_EN_BOOL=true
+          [ -n "$GR_DEST" ] && {
+            printf '%s{"dest":"%s","via":"%s","enabled":%s}' \
+              "$GR_SEP" "$GR_DEST" "$GR_VIA" "$GR_EN_BOOL"
+            GR_SEP=","
+          }
+          GR_I=$(( GR_I + 1 ))
+        done
+        printf ']}\n'
+        ;;
+
+      test_route)
+        INPUT=$(cat)
+        IP=$(echo "$INPUT" | jsonfilter -e '@.ip' 2>/dev/null | grep -oE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$')
+        [ -z "$IP" ] && { printf '{"dev":"","error":"invalid ip"}\n'; exit 0; }
+        DEV=$(ip route get "$IP" 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}')
+        [ -z "$DEV" ] && { printf '{"dev":"","error":"no route"}\n'; exit 0; }
+        printf '{"dev":"%s"}\n' "$DEV"
+        ;;
+
+      save_rules)
+        INPUT=$(cat)
+        while uci -q delete "$UCI_CONF.@rule[0]" 2>/dev/null; do :; done
+        SR_I=0
+        while true; do
+          SR_DEST=$(echo "$INPUT" | jsonfilter -e "@.rules[$SR_I].dest" 2>/dev/null)
+          [ -z "$SR_DEST" ] && break
+          echo "$SR_DEST" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$' || {
+            SR_I=$(( SR_I + 1 )); continue
+          }
+          SR_VIA=$(echo "$INPUT" | jsonfilter -e "@.rules[$SR_I].via" 2>/dev/null)
+          case "$SR_VIA" in wg|direct) ;; *) SR_VIA="direct" ;; esac
+          SR_EN=$(echo "$INPUT" | jsonfilter -e "@.rules[$SR_I].enabled" 2>/dev/null)
+          [ "$SR_EN" = "false" ] && SR_EN=0 || SR_EN=1
+          uci add "$UCI_CONF" rule >/dev/null
+          uci set "$UCI_CONF.@rule[-1].dest=$SR_DEST"
+          uci set "$UCI_CONF.@rule[-1].via=$SR_VIA"
+          uci set "$UCI_CONF.@rule[-1].enabled=$SR_EN"
+          SR_I=$(( SR_I + 1 ))
+        done
+        uci commit "$UCI_CONF"
+        _apply_custom_rules
+        printf '{"result":"ok","count":%s}\n' "$SR_I"
+        ;;
+
+    esac
+    ;;
+esac

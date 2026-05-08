@@ -1,0 +1,45 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+AUTOSTART=/etc/xray/autostart
+CONFIG=/etc/xray/config.json
+PIDFILE=/var/run/xray.pid
+
+start() {
+	[ -f "$AUTOSTART" ] || return 0
+	[ -f "$CONFIG" ]    || return 0
+	[ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null && return 0
+
+	export XRAY_LOCATION_ASSET=/usr/bin
+	/usr/bin/xray run -config "$CONFIG" >/tmp/xray.log 2>&1 &
+	echo $! > "$PIDFILE"
+	sleep 3
+	/etc/xray/tproxy-rules.sh add >/dev/null 2>&1
+
+	# Re-apply custom WG subnet routes (volatile, lost on reboot)
+	ri=0
+	while uci -q get "vpnrouting.@rule[$ri]" >/dev/null 2>&1; do
+		rdest=$(uci -q get "vpnrouting.@rule[$ri].dest"    2>/dev/null)
+		rvia=$(uci -q get  "vpnrouting.@rule[$ri].via"     2>/dev/null)
+		ren=$(uci -q get   "vpnrouting.@rule[$ri].enabled" 2>/dev/null)
+		[ -n "$rdest" ] && [ "$ren" != "0" ] && [ "$rvia" = "wg" ] && \
+			ip route replace "$rdest" dev wg0 2>/dev/null
+		ri=$(( ri + 1 ))
+	done
+}
+
+stop() {
+	/etc/xray/tproxy-rules.sh del >/dev/null 2>&1
+	[ -f "$PIDFILE" ] && {
+		kill "$(cat $PIDFILE)" 2>/dev/null
+		rm -f "$PIDFILE"
+	}
+	pkill -x xray 2>/dev/null
+	return 0
+}
+
+restart() {
+	stop; sleep 1; start
+}

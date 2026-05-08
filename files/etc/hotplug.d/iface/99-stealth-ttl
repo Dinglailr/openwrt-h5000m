@@ -1,0 +1,26 @@
+#!/bin/sh
+# Apply TTL 65 on WAN interfaces to bypass carrier tethering detection.
+# TTL 65 → carrier sees TTL 64 after the first hop (looks like a single device).
+# Fires on both 5G modem WANs (wwan*) and Wi-Fi WANs (travelmate trm_*).
+
+[ "$ACTION" = "ifup" ] || exit 0
+
+# Match any WAN-zone interface or known WAN naming patterns
+ZONE=$(fw3 -q zone "$INTERFACE" 2>/dev/null)
+case "$INTERFACE" in
+    wan|wwan*|trm_wwan|*5g*|*lte*|*modem*) : ;;
+    *)
+        [ "$ZONE" = "wan" ] || exit 0
+        ;;
+esac
+
+[ -z "$DEVICE" ] && exit 0
+
+# Idempotent: drop stale rules before inserting fresh ones
+iptables  -t mangle -D POSTROUTING -o "$DEVICE" -j TTL --ttl-set 65 2>/dev/null
+ip6tables -t mangle -D POSTROUTING -o "$DEVICE" -j HL  --hl-set  65 2>/dev/null
+
+iptables  -t mangle -A POSTROUTING -o "$DEVICE" -j TTL --ttl-set 65
+ip6tables -t mangle -A POSTROUTING -o "$DEVICE" -j HL  --hl-set  65
+
+logger -t stealth-ttl "TTL/HL 65 applied → $DEVICE (iface: $INTERFACE, zone: ${ZONE:-unknown})"

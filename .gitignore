@@ -13,7 +13,7 @@
 /logs
 /feeds
 /feeds.conf
-/files
+# /files is intentional build overlay — do NOT ignore it
 /target/linux/feeds
 /overlay
 /package/feeds

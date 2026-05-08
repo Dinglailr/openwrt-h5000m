@@ -1,0 +1,15 @@
+{
+  "luci-app-xray": {
+    "description": "Grant access to Xray VPN ubus control",
+    "read": {
+      "ubus": {
+        "luci.xray": [ "status", "get_exit_ip", "list_profiles", "get_profile" ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "luci.xray": [ "enable", "disable", "save_profile", "delete_profile", "activate_profile" ]
+      }
+    }
+  }
+}

@@ -1,0 +1,264 @@
+#!/bin/sh
+
+PROFILES_DIR=/etc/wireguard/profiles
+ACTIVE_FILE=/etc/wireguard/active
+WG_IFACE=wg0
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+_safe_file_id() {
+  echo "$1" | sed 's/[^a-zA-Z0-9._-]//g'
+}
+
+_safe_id() {
+  echo "$1" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz' | \
+    sed 's/[^a-z0-9_]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-48
+}
+
+_read_active() {
+  cat "$ACTIVE_FILE" 2>/dev/null | tr -d ' \t\r\n'
+}
+
+_wg_up() {
+  ip link show "$WG_IFACE" 2>/dev/null | grep -q "state UP" && echo true || echo false
+}
+
+_wg_handshake_age() {
+  local hs now
+  hs=$(wg show "$WG_IFACE" latest-handshakes 2>/dev/null | awk '{print $2}' | head -1)
+  [ -z "$hs" ] || [ "$hs" = "0" ] && { echo -1; return; }
+  now=$(date +%s)
+  echo $(( now - hs ))
+}
+
+_wg_connected() {
+  local age
+  age=$(_wg_handshake_age)
+  [ "$age" -ge 0 ] && [ "$age" -lt 180 ] && echo "true" || echo "false"
+}
+
+_norm_dns() {
+  # accept "1.1.1.1, 8.8.8.8" or "1.1.1.1 8.8.8.8" → "1.1.1.1 8.8.8.8"
+  echo "$1" | tr ',' ' ' | tr -s ' ' | sed 's/^ //; s/ $//'
+}
+
+_apply_profile() {
+  local ID="$1"
+  local FILE="$PROFILES_DIR/${ID}.json"
+  [ -f "$FILE" ] || return 1
+
+  local PRIVKEY ADDR DNS PUBKEY EP_HOST EP_PORT KEEPALIVE PSK
+  PRIVKEY=$(jsonfilter -i "$FILE" -e '@.private_key'         2>/dev/null)
+  ADDR=$(jsonfilter    -i "$FILE" -e '@.address'             2>/dev/null)
+  DNS=$(jsonfilter     -i "$FILE" -e '@.dns'                 2>/dev/null)
+  PUBKEY=$(jsonfilter  -i "$FILE" -e '@.peer_public_key'     2>/dev/null)
+  EP_HOST=$(jsonfilter -i "$FILE" -e '@.endpoint_host'       2>/dev/null)
+  EP_PORT=$(jsonfilter -i "$FILE" -e '@.endpoint_port'       2>/dev/null)
+  KEEPALIVE=$(jsonfilter -i "$FILE" -e '@.persistent_keepalive' 2>/dev/null)
+  PSK=$(jsonfilter     -i "$FILE" -e '@.preshared_key'       2>/dev/null)
+  NAME=$(jsonfilter    -i "$FILE" -e '@.name'                2>/dev/null)
+
+  [ -z "$EP_PORT" ]   && EP_PORT=51820
+  [ -z "$KEEPALIVE" ] && KEEPALIVE=25
+  [ -z "$DNS" ]       && DNS="1.1.1.1 8.8.8.8"
+
+  # Interface section
+  uci set "network.${WG_IFACE}=interface"
+  uci set "network.${WG_IFACE}.proto=wireguard"
+  uci set "network.${WG_IFACE}.private_key=$PRIVKEY"
+  uci set "network.${WG_IFACE}.addresses=$ADDR"
+  uci set "network.${WG_IFACE}.dns=$DNS"
+
+  # Peer section — delete and recreate
+  uci -q delete "network.${WG_IFACE}_peer"
+  uci set "network.${WG_IFACE}_peer=wireguard_${WG_IFACE}"
+  uci set "network.${WG_IFACE}_peer.public_key=$PUBKEY"
+  uci set "network.${WG_IFACE}_peer.endpoint_host=$EP_HOST"
+  uci set "network.${WG_IFACE}_peer.endpoint_port=$EP_PORT"
+  uci set "network.${WG_IFACE}_peer.persistent_keepalive=$KEEPALIVE"
+  uci set "network.${WG_IFACE}_peer.route_allowed_ips=0"
+  uci add_list "network.${WG_IFACE}_peer.allowed_ips=0.0.0.0/0"
+  uci set "network.${WG_IFACE}_peer.description=$NAME"
+  [ -n "$PSK" ] && uci set "network.${WG_IFACE}_peer.preshared_key=$PSK"
+
+  uci commit network
+}
+
+_restart_wg() {
+  ifdown "$WG_IFACE" 2>/dev/null
+  sleep 1
+  ifup "$WG_IFACE" 2>/dev/null
+  sleep 2
+  # Re-apply custom subnet routes from vpnrouting
+  ri=0
+  while uci -q get "vpnrouting.@rule[$ri]" >/dev/null 2>&1; do
+    rdest=$(uci -q get "vpnrouting.@rule[$ri].dest"    2>/dev/null)
+    rvia=$(uci -q get  "vpnrouting.@rule[$ri].via"     2>/dev/null)
+    ren=$(uci -q get   "vpnrouting.@rule[$ri].enabled" 2>/dev/null)
+    [ -n "$rdest" ] && [ "$ren" != "0" ] && [ "$rvia" = "wg" ] && \
+      ip route replace "$rdest" dev "$WG_IFACE" 2>/dev/null
+    ri=$(( ri + 1 ))
+  done
+}
+
+_auto_import() {
+  # Import existing UCI wg0 config if no profiles exist yet
+  ls "$PROFILES_DIR"/*.json >/dev/null 2>&1 && return
+  PROTO=$(uci -q get "network.${WG_IFACE}.proto" 2>/dev/null)
+  [ "$PROTO" = "wireguard" ] || return
+  local PRIVKEY ADDR DNS PUBKEY EP_HOST EP_PORT KEEPALIVE PSK NAME
+  PRIVKEY=$(uci -q get "network.${WG_IFACE}.private_key" 2>/dev/null)
+  ADDR=$(uci -q get    "network.${WG_IFACE}.addresses"   2>/dev/null)
+  DNS=$(uci -q get     "network.${WG_IFACE}.dns"         2>/dev/null)
+  PUBKEY=$(uci -q get  "network.${WG_IFACE}_peer.public_key"          2>/dev/null)
+  EP_HOST=$(uci -q get "network.${WG_IFACE}_peer.endpoint_host"       2>/dev/null)
+  EP_PORT=$(uci -q get "network.${WG_IFACE}_peer.endpoint_port"       2>/dev/null)
+  KEEPALIVE=$(uci -q get "network.${WG_IFACE}_peer.persistent_keepalive" 2>/dev/null)
+  PSK=$(uci -q get     "network.${WG_IFACE}_peer.preshared_key"       2>/dev/null)
+  NAME=$(uci -q get    "network.${WG_IFACE}_peer.description"         2>/dev/null)
+  [ -z "$PUBKEY" ] || [ -z "$EP_HOST" ] && return
+  [ -z "$EP_PORT" ]   && EP_PORT=51820
+  [ -z "$KEEPALIVE" ] && KEEPALIVE=25
+  [ -z "$DNS" ]       && DNS="1.1.1.1 8.8.8.8"
+  [ -z "$NAME" ]      && NAME="Imported (wg0)"
+  mkdir -p "$PROFILES_DIR"
+  local ID="imported-wg0"
+  printf '{"name":"%s","private_key":"%s","address":"%s","dns":"%s","peer_public_key":"%s","endpoint_host":"%s","endpoint_port":%s,"persistent_keepalive":%s,"preshared_key":"%s"}\n' \
+    "$NAME" "$PRIVKEY" "$ADDR" "$DNS" "$PUBKEY" "$EP_HOST" "$EP_PORT" "$KEEPALIVE" "$PSK" \
+    > "$PROFILES_DIR/${ID}.json"
+  printf '%s' "$ID" > "$ACTIVE_FILE"
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────
+
+case "$1" in
+  list)
+    echo '{"status":{},"enable":{},"disable":{},"list_profiles":{},"get_profile":{"id":""},"save_profile":{"id":"","name":"","private_key":"","address":"","dns":"","peer_public_key":"","endpoint_host":"","endpoint_port":0,"persistent_keepalive":0,"preshared_key":""},"delete_profile":{"id":""},"activate_profile":{"id":""}}'
+    ;;
+  call)
+    case "$2" in
+
+      status)
+        CONNECTED=$(_wg_connected)
+        AGE=$(_wg_handshake_age)
+        UP=$(_wg_up)
+        EP=$(wg show "$WG_IFACE" endpoints 2>/dev/null | awk '{print $2}' | head -1)
+        [ -z "$EP" ] && EP=""
+        TX=$(cat /sys/class/net/$WG_IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
+        RX=$(cat /sys/class/net/$WG_IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
+        ACTIVE=$(_read_active)
+        ACTIVE_NAME=""
+        [ -n "$ACTIVE" ] && [ -f "$PROFILES_DIR/$ACTIVE.json" ] && \
+          ACTIVE_NAME=$(jsonfilter -i "$PROFILES_DIR/$ACTIVE.json" -e '@.name' 2>/dev/null)
+        HAS_PROFILES=false
+        mkdir -p "$PROFILES_DIR"
+        ls "$PROFILES_DIR"/*.json >/dev/null 2>&1 && HAS_PROFILES=true
+        printf '{"connected":%s,"up":%s,"handshake_age":%s,"endpoint":"%s","tx":%s,"rx":%s,"active":"%s","active_name":"%s","has_profiles":%s}\n' \
+          "$CONNECTED" "$UP" "$AGE" "$EP" "$TX" "$RX" "$ACTIVE" "$ACTIVE_NAME" "$HAS_PROFILES"
+        ;;
+
+      enable)
+        ifup "$WG_IFACE" 2>/dev/null
+        sleep 2
+        _restart_wg
+        echo '{"result":"ok"}'
+        ;;
+
+      disable)
+        ifdown "$WG_IFACE" 2>/dev/null
+        echo '{"result":"ok"}'
+        ;;
+
+      list_profiles)
+        mkdir -p "$PROFILES_DIR"
+        _auto_import
+        ACTIVE=$(_read_active)
+        printf '{"profiles":['
+        SEP=""
+        for f in "$PROFILES_DIR"/*.json; do
+          [ -f "$f" ] || continue
+          ID=$(basename "$f" .json)
+          NAME=$(jsonfilter -i "$f" -e '@.name'          2>/dev/null || echo "$ID")
+          EP_HOST=$(jsonfilter -i "$f" -e '@.endpoint_host' 2>/dev/null || echo "")
+          EP_PORT=$(jsonfilter -i "$f" -e '@.endpoint_port' 2>/dev/null || echo 51820)
+          IS_ACTIVE=false; [ "$ID" = "$ACTIVE" ] && IS_ACTIVE=true
+          printf '%s{"id":"%s","name":"%s","endpoint_host":"%s","endpoint_port":%s,"active":%s}' \
+            "$SEP" "$ID" "$NAME" "$EP_HOST" "$EP_PORT" "$IS_ACTIVE"
+          SEP=","
+        done
+        printf ']}\n'
+        ;;
+
+      get_profile)
+        INPUT=$(cat)
+        ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
+        FILE="$PROFILES_DIR/${ID}.json"
+        [ -f "$FILE" ] || { echo '{"error":"not found"}'; exit 0; }
+        cat "$FILE"
+        ;;
+
+      save_profile)
+        INPUT=$(cat)
+        NAME=$(echo      "$INPUT" | jsonfilter -e '@.name'                2>/dev/null)
+        PRIVKEY=$(echo   "$INPUT" | jsonfilter -e '@.private_key'         2>/dev/null)
+        ADDR=$(echo      "$INPUT" | jsonfilter -e '@.address'             2>/dev/null)
+        DNS=$(echo       "$INPUT" | jsonfilter -e '@.dns'                 2>/dev/null)
+        PUBKEY=$(echo    "$INPUT" | jsonfilter -e '@.peer_public_key'     2>/dev/null)
+        EP_HOST=$(echo   "$INPUT" | jsonfilter -e '@.endpoint_host'       2>/dev/null)
+        EP_PORT=$(echo   "$INPUT" | jsonfilter -e '@.endpoint_port'       2>/dev/null)
+        KEEPALIVE=$(echo "$INPUT" | jsonfilter -e '@.persistent_keepalive' 2>/dev/null)
+        PSK=$(echo       "$INPUT" | jsonfilter -e '@.preshared_key'       2>/dev/null)
+        ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
+
+        [ -z "$NAME" ] || [ -z "$PRIVKEY" ] || [ -z "$ADDR" ] || \
+        [ -z "$PUBKEY" ] || [ -z "$EP_HOST" ] && {
+          echo '{"error":"name, private_key, address, peer_public_key, endpoint_host are required"}'; exit 0
+        }
+        [ -z "$EP_PORT" ]   && EP_PORT=51820
+        [ -z "$KEEPALIVE" ] && KEEPALIVE=25
+        DNS=$(_norm_dns "${DNS:-1.1.1.1 8.8.8.8}")
+        [ -z "$ID" ] && ID=$(_safe_id "$NAME")
+        [ -z "$ID" ] && ID="wg-$(date +%s)"
+
+        mkdir -p "$PROFILES_DIR"
+        printf '{"name":"%s","private_key":"%s","address":"%s","dns":"%s","peer_public_key":"%s","endpoint_host":"%s","endpoint_port":%s,"persistent_keepalive":%s,"preshared_key":"%s"}\n' \
+          "$NAME" "$PRIVKEY" "$ADDR" "$DNS" "$PUBKEY" "$EP_HOST" "$EP_PORT" "$KEEPALIVE" "$PSK" \
+          > "$PROFILES_DIR/${ID}.json"
+
+        # Auto-activate if first profile or none active
+        ACTIVE=$(_read_active)
+        COUNT=$(ls "$PROFILES_DIR"/*.json 2>/dev/null | wc -l)
+        if [ -z "$ACTIVE" ] || [ "$COUNT" -eq 1 ]; then
+          _apply_profile "$ID"
+          printf '%s' "$ID" > "$ACTIVE_FILE"
+          _restart_wg
+        fi
+
+        printf '{"result":"ok","id":"%s"}\n' "$ID"
+        ;;
+
+      delete_profile)
+        INPUT=$(cat)
+        ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
+        FILE="$PROFILES_DIR/${ID}.json"
+        [ -f "$FILE" ] || { echo '{"error":"not found"}'; exit 0; }
+        rm -f "$FILE"
+        ACTIVE=$(_read_active)
+        [ "$ACTIVE" = "$ID" ] && rm -f "$ACTIVE_FILE"
+        echo '{"result":"ok"}'
+        ;;
+
+      activate_profile)
+        INPUT=$(cat)
+        ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
+        FILE="$PROFILES_DIR/${ID}.json"
+        [ -f "$FILE" ] || { echo '{"error":"not found"}'; exit 0; }
+        _apply_profile "$ID" || { echo '{"error":"failed to apply profile"}'; exit 0; }
+        printf '%s' "$ID" > "$ACTIVE_FILE"
+        _restart_wg
+        echo '{"result":"ok"}'
+        ;;
+
+    esac
+    ;;
+esac
