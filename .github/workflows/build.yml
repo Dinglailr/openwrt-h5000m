@@ -2,7 +2,7 @@ name: Build H5000M Firmware
 
 on:
   push:
-    branches: [ h5000m-custom ]
+    branches: [ h5000m-custom, h5000m-stable ]
   workflow_dispatch:
 
 jobs:
@@ -14,7 +14,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
       with:
-        ref: h5000m-custom
+        ref: ${{ github.ref }}
         fetch-depth: 1
 
     - name: Free disk space
