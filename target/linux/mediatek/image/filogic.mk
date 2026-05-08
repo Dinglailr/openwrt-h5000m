@@ -1752,11 +1752,14 @@ define Device/hiveton_h5000m
   DEVICE_DTS := mt7987a-hiveton-h5000m
   DEVICE_DTS_DIR := ../dts
   DEVICE_PACKAGES := kmod-hwmon-pwmfan kmod-usb3 mt7987-2p5g-phy-firmware \
-	kmod-mt7996e kmod-mt7992-23-firmware e2fsprogs f2fsck mkf2fs \
+	kmod-mt7996e kmod-mt7992-23-firmware \
 	kmod-usb-net-qmi-wwan kmod-usb-serial-option uqmi luci-proto-qmi usbutils \
 	kmod-nft-offload luci luci-app-firewall luci-app-opkg luci-theme-bootstrap \
-	wireguard-tools luci-proto-wireguard kmod-tun kmod-tcp-bbr luci-app-sqm \
-	pciutils htop bash kmod-fs-ntfs3 kmod-fs-exfat
+	wireguard-tools luci-proto-wireguard rpcd-mod-wireguard kmod-wireguard \
+	htop bash pciutils kmod-tcp-bbr \
+	travelmate luci-app-travelmate luci-app-ttyd luci-app-sqm sqm-scripts \
+	kmod-nft-tproxy iptables-mod-ipopt tailscale \
+	wpad-openssl -wpad-basic-mbedtls -wpad-mesh-mbedtls
   KERNEL_LOADADDR := 0x40080000
   KERNEL = kernel-bin | lzma | \
 	fit lzma $(KDIR)/image-$(firstword $(DEVICE_DTS)).dtb
