@@ -1,9 +1,10 @@
 #!/bin/sh
-IFACE="${1:-eth0}"
-SQM_SECTION="eth0"
-TEST_SECS=12
-FLOOR_KBPS=5000
-SCALE=90
+# Parameters read from UCI sqm.calibrate.* with hardcoded fallbacks
+IFACE="${1:-$(uci -q get sqm.calibrate.iface 2>/dev/null || echo eth0)}"
+SQM_SECTION="$(echo "$IFACE" | tr -c 'a-zA-Z0-9_' '_')"
+TEST_SECS=$(uci -q get sqm.calibrate.test_secs 2>/dev/null || echo 12)
+FLOOR_KBPS=$(uci -q get sqm.calibrate.floor_kbps 2>/dev/null || echo 5000)
+SCALE=$(uci -q get sqm.calibrate.scale 2>/dev/null || echo 90)
 
 DL_URLS="
 http://ipv4.download.thinkbroadband.com/100MB.zip

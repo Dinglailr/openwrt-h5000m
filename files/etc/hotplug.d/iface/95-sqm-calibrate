@@ -1,6 +1,8 @@
 #!/bin/sh
 # Re-calibrate SQM whenever the WAN comes up (new location = new line speed)
 [ "$ACTION" = "ifup" ] && [ "$INTERFACE" = "wan" ] && {
-    # Wait for routing to settle, then calibrate in background
-    (sleep 10 && /etc/sqm/calibrate.sh eth0) &
+    ENABLED=$(uci -q get sqm.calibrate.enabled 2>/dev/null)
+    [ "$ENABLED" = "0" ] && exit 0
+    IFACE=$(uci -q get sqm.calibrate.iface 2>/dev/null || echo eth0)
+    (sleep 10 && /etc/sqm/calibrate.sh "$IFACE") &
 }
