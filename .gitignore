@@ -3,7 +3,7 @@
 .*.swp
 /env
 /dl
-/.config
+# /.config intentionally tracked — single source of truth for H5000M package list
 /.config.old
 /.toolchain_build_ver
 /bin
