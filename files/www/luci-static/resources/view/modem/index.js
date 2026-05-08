@@ -4,14 +4,17 @@
 'require poll';
 'require ui';
 
-var callStatus = rpc.declare({ object: 'luci.modem', method: 'status', params: [] });
-var callAtCmd  = rpc.declare({ object: 'luci.modem', method: 'at_cmd',  params: ['cmd'] });
+var callStatus    = rpc.declare({ object: 'luci.modem', method: 'status',     params: [] });
+var callAtCmd     = rpc.declare({ object: 'luci.modem', method: 'at_cmd',     params: ['cmd'] });
+var callScanPorts = rpc.declare({ object: 'luci.modem', method: 'scan_ports', params: [] });
+var callSetPort   = rpc.declare({ object: 'luci.modem', method: 'set_port',   params: ['port'] });
 
 return view.extend({
 	_atHistory: [],
 
+	// Lazy load: render the page shell immediately; status fills in async
 	load: function() {
-		return callStatus();
+		return Promise.resolve(null);
 	},
 
 	// ── signal quality helpers ─────────────────────────────────────────────
@@ -26,18 +29,10 @@ return view.extend({
 		return ['Bad', '#c0392b'];
 	},
 
-	_sinrQuality: function(sinr) {
-		var v = parseInt(sinr);
-		if (isNaN(v)) return null;
-		if (v >= 20) return ['Excellent', '#27ae60'];
-		if (v >= 13) return ['Good',      '#2ecc71'];
-		if (v >= 0)  return ['Fair',      '#f39c12'];
-		return ['Poor', '#c0392b'];
-	},
-
 	_badge: function(label, color) {
 		return E('span', {
-			style: 'background:' + color + ';color:#fff;border-radius:4px;padding:2px 8px;font-size:12px;font-weight:600'
+			style: 'background:' + color + ';color:#fff;border-radius:4px;' +
+			       'padding:2px 8px;font-size:12px;font-weight:600'
 		}, [label]);
 	},
 
@@ -50,20 +45,116 @@ return view.extend({
 	},
 
 	_card: function(title, rows, extra) {
-		var trs = rows.map(function(r) { return r; });
 		return E('div', {
-			style: 'background:#fff;border:1px solid #ddd;border-radius:6px;padding:14px 16px;flex:1;min-width:240px'
+			style: 'background:#fff;border:1px solid #ddd;border-radius:6px;' +
+			       'padding:14px 16px;flex:1;min-width:240px'
 		}, [
 			E('div', { style: 'font-size:11px;font-weight:700;color:#aaa;letter-spacing:.6px;margin-bottom:10px' }, [title]),
-			E('table', { style: 'border-collapse:collapse;width:100%' }, trs),
+			E('table', { style: 'border-collapse:collapse;width:100%' }, rows),
 			extra || ''
+		]);
+	},
+
+	// ── port configuration ─────────────────────────────────────────────────
+
+	_renderPortConfig: function(currentPort) {
+		var self = this;
+
+		var portInput = E('input', {
+			type: 'text',
+			value: currentPort || '',
+			placeholder: '/dev/ttyUSB2',
+			style: 'flex:1;padding:6px 10px;border:1px solid #ccc;border-radius:4px;' +
+			       'font-family:monospace;font-size:13px;max-width:200px'
+		});
+
+		var scanResults = E('div', {
+			style: 'margin-top:8px;font-size:12px;color:#555;min-height:20px'
+		}, ['']);
+
+		var scanBtn = E('button', {
+			class: 'btn',
+			title: 'Scan /dev/ttyUSB* and /dev/ttyACM* for ports that respond to AT',
+			click: function() {
+				scanBtn.disabled = true;
+				scanBtn.textContent = 'Scanning…';
+				scanResults.textContent = '';
+				callScanPorts().then(function(r) {
+					scanBtn.disabled = false;
+					scanBtn.textContent = 'Scan';
+					if (!r || !r.ports || !r.ports.length) {
+						scanResults.textContent = 'No serial ports found';
+						return;
+					}
+					var atPorts = r.ports.filter(function(p) { return p.at_ok; });
+					if (!atPorts.length) {
+						scanResults.textContent = 'No AT-capable port found — check modem connection';
+						return;
+					}
+					scanResults.innerHTML = '';
+					scanResults.appendChild(document.createTextNode('AT port(s) detected: '));
+					atPorts.forEach(function(p) {
+						var btn = E('button', {
+							class: 'btn',
+							style: 'font-size:11px;font-family:monospace;padding:2px 7px;margin-left:4px',
+							click: function() { portInput.value = p.port; }
+						}, [p.port]);
+						scanResults.appendChild(btn);
+					});
+				}).catch(function() {
+					scanBtn.disabled = false;
+					scanBtn.textContent = 'Scan';
+					scanResults.textContent = 'Scan failed';
+				});
+			}
+		}, 'Scan');
+
+		var saveBtn = E('button', {
+			class: 'btn cbi-button-action',
+			title: 'Save selected port to /etc/config/modem',
+			click: function() {
+				var port = portInput.value.trim();
+				if (!port) return;
+				saveBtn.disabled = true;
+				saveBtn.textContent = 'Saving…';
+				callSetPort(port).then(function(r) {
+					saveBtn.disabled = false;
+					if (r && r.ok) {
+						saveBtn.textContent = '✓ Saved';
+						setTimeout(function() { saveBtn.textContent = 'Save'; }, 2000);
+					} else {
+						saveBtn.textContent = r && r.error ? r.error : 'Error';
+						setTimeout(function() { saveBtn.textContent = 'Save'; }, 3000);
+					}
+				}).catch(function() {
+					saveBtn.disabled = false;
+					saveBtn.textContent = 'Save';
+				});
+			}
+		}, 'Save');
+
+		return E('div', {
+			style: 'background:#fff;border:1px solid #ddd;border-radius:6px;' +
+			       'padding:14px 16px;margin-bottom:16px'
+		}, [
+			E('div', {
+				style: 'font-size:11px;font-weight:700;color:#aaa;letter-spacing:.6px;margin-bottom:10px'
+			}, ['PORT CONFIGURATION']),
+			E('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, [
+				E('span', { style: 'font-size:13px;color:#555;white-space:nowrap' }, ['AT Port']),
+				portInput,
+				scanBtn,
+				saveBtn
+			]),
+			scanResults
 		]);
 	},
 
 	// ── status render ──────────────────────────────────────────────────────
 
-	_renderStatus: function(s, container) {
+	_renderStatus: function(s, container, titleEl) {
 		var self = this;
+
 		if (!s || s.error) {
 			container.innerHTML = '';
 			container.appendChild(E('div', { style: 'color:#c0392b;padding:12px' },
@@ -71,43 +162,49 @@ return view.extend({
 			return;
 		}
 
+		// Update page title dynamically from modem's own identity
+		if (titleEl) {
+			var name = [s.manufacturer, s.model].filter(Boolean).join(' ');
+			if (name) titleEl.textContent = name;
+		}
+
 		var rsrpQ = self._rsrpQuality(s.rsrp);
-		var sinrQ = self._sinrQuality(s.sinr);
 		var sigQuality = rsrpQ ? self._badge(rsrpQ[0], rsrpQ[1]) : '—';
 
-		// Sim status badge
 		var simOk = s.sim_status === 'READY';
 		var simBadge = self._badge(
 			simOk ? 'Ready' : (s.sim_status || 'Not Inserted'),
 			simOk ? '#27ae60' : '#c0392b'
 		);
 
-		// Registration badge
-		var regOk = s.registration && s.registration.indexOf('Registered') === 0;
+		// When no SIM, suppress misleading "Searching" from registration commands
+		var regText = s.registration;
+		if (!simOk && s.sim_status && s.sim_status !== 'READY') {
+			regText = 'No SIM';
+		}
+		var regOk = regText && regText.indexOf('Registered') === 0;
 		var regBadge = self._badge(
-			s.registration || 'Not Registered',
-			regOk ? '#27ae60' : (s.registration === 'Searching' ? '#f39c12' : '#c0392b')
+			regText || 'Not Registered',
+			regOk ? '#27ae60' : (regText === 'Searching' ? '#f39c12' : '#c0392b')
 		);
 
 		var cards = E('div', {
 			style: 'display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px'
 		}, [
-			// Module card
 			self._card('MODULE', [
-				self._row('Model',    s.model),
-				self._row('Firmware', s.revision),
-				self._row('IMEI',     s.imei),
-				self._row('Port',     s.port)
+				self._row('Manufacturer', s.manufacturer),
+				self._row('Model',        s.model),
+				self._row('Firmware',     s.revision),
+				self._row('IMEI',         s.imei),
+				self._row('Port',         s.port)
 			]),
 
-			// SIM card
 			self._card('SIM', [
 				self._row('Status', simBadge),
 				self._row('ICCID',  s.iccid),
 				self._row('IMSI',   s.imsi)
 			]),
 
-			// Network card
 			self._card('NETWORK', [
 				self._row('Registration', regBadge),
 				self._row('Operator',     s.operator),
@@ -116,16 +213,16 @@ return view.extend({
 				self._row('IP Address',   s.ip)
 			]),
 
-			// Signal card
 			self._card('SIGNAL', [
 				self._row('Quality', sigQuality),
 				self._row('RSRP', s.rsrp ? s.rsrp + ' dBm' : null, 'Ref Signal Received Power'),
 				self._row('RSRQ', s.rsrq ? s.rsrq + ' dB'  : null, 'Ref Signal Received Quality'),
-				self._row('SINR', s.sinr ? s.sinr + ' dB'  : null, 'Signal to Interference+Noise Ratio'),
+				self._row('SINR', s.sinr ? s.sinr + ' dB'  : null, 'Signal/Interference+Noise Ratio'),
 				self._row('RSSI', s.rssi ? s.rssi + ' dBm' : null, 'Received Signal Strength')
 			], s.temp_modem
-				? E('div', { style: 'margin-top:8px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#888' },
-					['Modem ' + s.temp_modem + '°C' + (s.temp_cpu ? '  ·  CPU ' + s.temp_cpu + '°C' : '')])
+				? E('div', {
+					style: 'margin-top:8px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#888'
+				  }, ['Modem ' + s.temp_modem + '°C' + (s.temp_cpu ? '  ·  CPU ' + s.temp_cpu + '°C' : '')])
 				: null
 			)
 		]);
@@ -149,8 +246,9 @@ return view.extend({
 		var input = E('input', {
 			type: 'text',
 			id: 'at-input',
-			placeholder: 'e.g. AT+QCSQ',
-			style: 'flex:1;padding:6px 10px;border:1px solid #ccc;border-radius:4px;font-family:monospace;font-size:13px',
+			placeholder: 'e.g. AT+CGMI',
+			style: 'flex:1;padding:6px 10px;border:1px solid #ccc;border-radius:4px;' +
+			       'font-family:monospace;font-size:13px',
 			keydown: function(ev) {
 				if (ev.key === 'Enter') sendBtn.click();
 				if (ev.key === 'ArrowUp') {
@@ -176,11 +274,10 @@ return view.extend({
 				callAtCmd(cmd).then(function(r) {
 					sendBtn.disabled = false;
 					sendBtn.textContent = 'Send';
-					if (r && r.response) {
+					if (r && r.response)
 						output.textContent += r.response + '\n';
-					} else if (r && r.error) {
+					else if (r && r.error)
 						output.textContent += 'Error: ' + r.error + '\n';
-					}
 					output.scrollTop = output.scrollHeight;
 				}).catch(function(err) {
 					sendBtn.disabled = false;
@@ -197,23 +294,42 @@ return view.extend({
 			click: function() { output.textContent = 'Cleared.\n'; }
 		}, 'Clear');
 
-		// Quick command buttons
-		var quickCmds = ['ATI', 'AT+CPIN?', 'AT+COPS?', 'AT+QCSQ', 'AT+QNWINFO', 'AT+CEREG?', 'AT+QTEMP', 'AT+CGPADDR=1'];
-		var quickBar = E('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px' },
-			quickCmds.map(function(cmd) {
-				return E('button', {
-					class: 'btn',
-					style: 'font-size:11px;font-family:monospace;padding:3px 8px',
-					click: function() {
-						input.value = cmd;
-						sendBtn.click();
-					}
-				}, [cmd]);
-			})
-		);
+		// Quick commands with tooltips explaining what each one does
+		var quickCmds = [
+			{ cmd: 'ATI',          tip: 'Module identity: manufacturer, model and firmware revision' },
+			{ cmd: 'AT+CGMI',      tip: 'Manufacturer name — 3GPP standard, works on all modems' },
+			{ cmd: 'AT+CGMM',      tip: 'Model number — 3GPP standard, works on all modems' },
+			{ cmd: 'AT+CPIN?',     tip: 'SIM card status: READY, NOT INSERTED, SIM PIN, SIM PUK…' },
+			{ cmd: 'AT+COPS?',     tip: 'Active network operator, format and access technology (2G/3G/4G/5G)' },
+			{ cmd: 'AT+QCSQ',      tip: 'Extended signal quality: RSRP, RSRQ, SINR — Quectel vendor command' },
+			{ cmd: 'AT+CESQ',      tip: 'Extended signal quality: RSRP, RSRQ — 3GPP standard (TS 27.007)' },
+			{ cmd: 'AT+CSQ',       tip: 'Basic received signal strength (RSSI) — 3GPP, all modems' },
+			{ cmd: 'AT+QNWINFO',   tip: 'Current network type and frequency band — Quectel vendor command' },
+			{ cmd: 'AT+CEREG?',    tip: 'LTE/NR packet-switched registration status and cell info' },
+			{ cmd: 'AT+QTEMP',     tip: 'Module temperature sensors (modem core, CPU…) — Quectel vendor command' },
+			{ cmd: 'AT+CGPADDR=1', tip: 'IP address(es) assigned to PDP/EPS/PDU context 1' }
+		];
 
-		return E('div', { style: 'background:#fff;border:1px solid #ddd;border-radius:6px;padding:14px 16px' }, [
-			E('div', { style: 'font-size:11px;font-weight:700;color:#aaa;letter-spacing:.6px;margin-bottom:12px' }, ['AT TERMINAL']),
+		var quickBar = E('div', {
+			style: 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px'
+		}, quickCmds.map(function(item) {
+			return E('button', {
+				class: 'btn',
+				title: item.tip,
+				style: 'font-size:11px;font-family:monospace;padding:3px 8px',
+				click: function() {
+					input.value = item.cmd;
+					sendBtn.click();
+				}
+			}, [item.cmd]);
+		}));
+
+		return E('div', {
+			style: 'background:#fff;border:1px solid #ddd;border-radius:6px;padding:14px 16px'
+		}, [
+			E('div', {
+				style: 'font-size:11px;font-weight:700;color:#aaa;letter-spacing:.6px;margin-bottom:12px'
+			}, ['AT TERMINAL']),
 			quickBar,
 			output,
 			E('div', { style: 'display:flex;gap:8px;margin-top:10px;align-items:center' }, [
@@ -224,8 +340,10 @@ return view.extend({
 
 	// ── render ────────────────────────────────────────────────────────────
 
-	render: function(initData) {
+	render: function() {
 		var self = this;
+
+		var titleEl = E('h2', {}, ['5G Modem']);
 
 		var statusContainer = E('div', { id: 'modem-status' }, [
 			E('div', { style: 'color:#888;padding:12px' }, ['Loading modem status…'])
@@ -235,33 +353,46 @@ return view.extend({
 			style: 'font-size:11px;color:#aaa;margin-left:12px'
 		}, ['']);
 
+		var portConfig = self._renderPortConfig('');
+
 		var refreshBtn = E('button', {
 			class: 'btn',
 			style: 'font-size:12px',
 			click: function() {
 				lastUpdate.textContent = 'Refreshing…';
 				callStatus().then(function(s) {
-					self._renderStatus(s, statusContainer);
+					self._renderStatus(s, statusContainer, titleEl);
+					// Update port input in portConfig with live port value
+					if (s && s.port) {
+						var pi = portConfig.querySelector('input[type=text]');
+						if (pi && !pi.value) pi.value = s.port;
+					}
 					lastUpdate.textContent = 'Updated ' + new Date().toLocaleTimeString();
 				});
 			}
 		}, '↻ Refresh');
 
-		// Initial render
-		self._renderStatus(initData, statusContainer);
-		if (initData && !initData.error)
+		// Kick off async status load immediately — page is already painted
+		callStatus().then(function(s) {
+			self._renderStatus(s, statusContainer, titleEl);
+			if (s && s.port) {
+				var pi = portConfig.querySelector('input[type=text]');
+				if (pi && !pi.value) pi.value = s.port;
+			}
 			lastUpdate.textContent = 'Updated ' + new Date().toLocaleTimeString();
+		});
 
-		// Auto-refresh every 20s (status takes ~12s to collect)
+		// Auto-refresh every 20s
 		poll.add(function() {
 			return callStatus().then(function(s) {
-				self._renderStatus(s, statusContainer);
+				self._renderStatus(s, statusContainer, titleEl);
 				lastUpdate.textContent = 'Updated ' + new Date().toLocaleTimeString();
 			});
 		}, 20);
 
 		return E('div', {}, [
-			E('h2', {}, ['5G Modem — Quectel RM520N-GL']),
+			titleEl,
+			portConfig,
 			E('div', { style: 'display:flex;align-items:center;margin-bottom:14px' }, [
 				E('span', { style: 'font-size:13px;color:#555' }, ['Status auto-refreshes every 20s']),
 				lastUpdate,

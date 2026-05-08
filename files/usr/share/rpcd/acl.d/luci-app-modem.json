@@ -3,12 +3,12 @@
     "description": "Grant access to 5G modem AT command interface",
     "read": {
       "ubus": {
-        "luci.modem": ["status"]
+        "luci.modem": ["status", "scan_ports"]
       }
     },
     "write": {
       "ubus": {
-        "luci.modem": ["at_cmd"]
+        "luci.modem": ["at_cmd", "set_port"]
       }
     }
   }
