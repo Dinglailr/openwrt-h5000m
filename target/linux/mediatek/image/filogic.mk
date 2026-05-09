@@ -1762,9 +1762,9 @@ define Device/hiveton_h5000m
 	wpad-openssl -wpad-basic-mbedtls -wpad-mesh-mbedtls
   KERNEL_LOADADDR := 0x40080000
   KERNEL = kernel-bin | lzma | \
-	fit lzma $(KDIR)/image-$(firstword $(DEVICE_DTS)).dtb
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb
   KERNEL_INITRAMFS = kernel-bin | lzma | \
-	fit lzma $(KDIR)/image-$(firstword $(DEVICE_DTS)).dtb with-initrd
+	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd
   IMAGE_SIZE := 512m
   IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
 endef
