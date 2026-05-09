@@ -8,16 +8,24 @@ cd /openwrt
 rm -f scripts/config/mconf scripts/config/conf
 find scripts/config -name "*.o" -delete 2>/dev/null || true
 
-# Clean untracked files in feeds that block git pull
+# Clean untracked files in all feeds that can block git pull
 find feeds -name "*.po" -not -path "*/\.git/*" -delete 2>/dev/null || true
-git -C feeds/luci clean -fd -q 2>/dev/null || true
-git -C feeds/packages clean -fd -q 2>/dev/null || true
+for feed in luci packages routing telephony video; do
+    git -C "feeds/$feed" clean -fd -q 2>/dev/null || true
+done
 
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
-# Patch the broken Makefile that incorrectly blocks arm64 even when using an external bootstrap
-sed -i 's/linux\/amd64 \\/linux\/amd64 \\\n  linux\/arm64 \\/' feeds/packages/lang/golang/golang-bootstrap/Makefile
+# Allow arm64 host in Go bootstrap Makefile (robust: only patches if arm64 not already present)
+GO_BOOTSTRAP_MK="feeds/packages/lang/golang/golang-bootstrap/Makefile"
+if grep -q "linux/arm64" "$GO_BOOTSTRAP_MK" 2>/dev/null; then
+    echo "Go bootstrap arm64 already present — skipping patch"
+else
+    sed -i 's/linux\/amd64 \\/linux\/amd64 \\\n  linux\/arm64 \\/' "$GO_BOOTSTRAP_MK" \
+        && echo "Go bootstrap arm64 patch applied" \
+        || { echo "ERROR: Go bootstrap patch failed — check $GO_BOOTSTRAP_MK"; exit 1; }
+fi
 
 # Fix for Go bootstrap failure natively on arm64:
 echo "CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT=\"/usr/lib/go\"" >> .config
@@ -43,3 +51,4 @@ echo "✨ Starting compilation (Log: /openwrt/build.log)..."
 # Pass REVISION explicitly — getver.sh can return 'unknown' when TOPDIR is unavailable in sub-shells
 # -j(nproc): Native architecture means no Rosetta pipe crashes!
 make -j$(nproc) REVISION=r28161-0 HOSTCC=gcc HOSTCXX=g++ V=s > /openwrt/build.log 2>&1
+echo "✅ make finished successfully"
