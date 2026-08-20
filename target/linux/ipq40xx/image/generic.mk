@@ -759,6 +759,24 @@ define Device/linksys_mr8300
 endef
 TARGET_DEVICES += linksys_mr8300
 
+define Device/linksys_mr9000
+	$(call Device/FitzImage)
+	$(call Device/kernel-size-6350-8300)
+	DEVICE_VENDOR := Linksys
+	DEVICE_MODEL := MR9000
+	SOC := qcom-ipq4019
+	KERNEL_SIZE := 5120k
+	IMAGE_SIZE := 84992k
+	NAND_SIZE := 256m
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	UBINIZE_OPTS := -E 5    # EOD marks to "hide" factory sig at EOF
+	IMAGES += factory.bin
+	IMAGE/factory.bin  := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-ubi | linksys-image type=MR9000
+	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct ipq-wifi-linksys_mr9000 kmod-usb-ledtrig-usbport
+endef
+TARGET_DEVICES += linksys_mr9000
+
 define Device/linksys_whw01
 	$(call Device/FitzImage)
 	DEVICE_VENDOR := Linksys
@@ -884,6 +902,14 @@ define Device/meraki_gx20
 	DEVICE_PACKAGES := -ath10k-board-qca4019 -ath10k-firmware-qca9887-ct
 endef
 TARGET_DEVICES += meraki_gx20
+
+define Device/meraki_z3c
+	$(call Device/meraki_common)
+	DEVICE_MODEL := Z3C
+	DEVICE_DTS_CONFIG := config@3
+	DEVICE_PACKAGES := kmod-usb-acm kmod-usb-net kmod-usb-net-cdc-ether -ath10k-firmware-qca9887-ct
+endef
+TARGET_DEVICES += meraki_z3c
 
 define Device/mobipromo_cm520-79f
 	$(call Device/FitzImage)
@@ -1224,6 +1250,22 @@ define Device/sony_ncp-hg100-cellular
 endef
 TARGET_DEVICES += sony_ncp-hg100-cellular
 
+define Device/sophos_apx120
+	$(call Device/FitImage)
+	$(call Device/UbiFit)
+	DEVICE_VENDOR := Sophos
+	DEVICE_MODEL := APX 120
+	SOC := qcom-ipq4019
+	DEVICE_DTS_CONFIG := config@ap.dk01.1-c2
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	IMAGES := sysupgrade.bin
+	DEVICE_PACKAGES := kmod-tpm-i2c-atmel
+	# Stock U-Boot rejects UBI layout changes from sysupgrade-tar
+	IMAGE/sysupgrade.bin := append-ubi | append-metadata
+endef
+TARGET_DEVICES += sophos_apx120
+
 define Device/teltonika_rutx10
 	$(call Device/FitImage)
 	$(call Device/UbiFit)
@@ -1272,6 +1314,21 @@ define Device/tel_x1pro
 endef
 # Missing DSA Setup
 #TARGET_DEVICES += tel_x1pro
+
+define Device/ubnt_utr
+	$(call Device/FitImageLzma)
+	$(call Device/UbiFit)
+	DEVICE_VENDOR := Ubiquiti
+	DEVICE_MODEL := UniFi Travel Router
+	SOC := qcom-ipq4018
+	DEVICE_DTS_CONFIG := config@ea06
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	KERNEL_IN_UBI :=
+	UBINIZE_PARTS = vol=$$(KDIR_KERNEL_IMAGE)
+	DEVICE_PACKAGES := ipq-wifi-ubnt_utr kmod-i2c-gpio kmod-iio-st_accel-i2c kmod-drm-panel-mipi-dbi kmod-backlight-pwm kmod-gpio-pwm kmod-btusb mipi-dbi-ubnt-utr
+endef
+TARGET_DEVICES += ubnt_utr
 
 define Device/unielec_u4019-32m
 	$(call Device/FitImage)

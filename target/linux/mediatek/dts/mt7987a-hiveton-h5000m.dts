@@ -9,12 +9,9 @@
 	compatible = "hiveton,h5000m", "mediatek,mt7987a", "mediatek,mt7987";
 
 	aliases {
-		label-mac-device = &gmac0;
-
-		led-boot = &led_status;
-		led-failsafe = &led_status;
-		led-upgrade = &led_status;
-
+		led-boot = &led_status_blue;
+		led-failsafe = &led_status_amber;
+		led-upgrade = &led_status_amber;
 		serial0 = &uart0;
 	};
 
@@ -43,36 +40,34 @@
 	};
 
 	/*
-	* LED Indicator Layout
-	* -------------------
-	* Total of 5 LED indicators, viewed from front with antenna facing up (left to right):
-	* 
-	* LED 1: 5G Module indicator
-	* LED 2: Built-in 2.5G Ethernet port indicator
-	* LED 3: User-definable (configurable in system)
-	* LED 4: User-definable (configurable in system)
-	* LED 5: Power indicator
-	* 
-	* Note: 
-	* - LEDs 1, 2, and 5 are hardware-controlled and cannot be modified via software
-	* - In vendor firmware, LEDs 3 and 4 are used as WiFi link activity indicators 
-	*   for dual-band (2.4GHz/5GHz) respectively
-	*/
+	 * LED Indicator Layout
+	 * -------------------
+	 * Total of 5 LED indicators, viewed from front with antenna facing up (left to right):
+	 *
+	 * LED 1: 5G Module indicator
+	 * LED 2: Built-in 2.5G Ethernet port indicator (configurable in system)
+	 * LED 3: User-definable (configurable in system)
+	 * LED 4: User-definable (configurable in system)
+	 * LED 5: Power indicator
+	 *
+	 * Note:
+	 * - LEDs 1 and 5 are hardware-controlled and cannot be modified via software
+	 * - In vendor firmware, LEDs 3 and 4 are used as WiFi link activity indicators
+	 *   for dual-band (2.4GHz/5GHz) respectively
+	 */
 	leds {
 		compatible = "gpio-leds";
 
-		led_status: led-3 {
+		led_status_amber: led-3 {
 			function = LED_FUNCTION_WLAN_2GHZ;
 			color = <LED_COLOR_ID_AMBER>;
 			gpios = <&pio 3 GPIO_ACTIVE_LOW>;
-			linux,default-trigger = "phy0tpt";
 		};
 
-		led_4: led-4 {
+		led_status_blue: led-4 {
 			function = LED_FUNCTION_WLAN_5GHZ;
 			color = <LED_COLOR_ID_BLUE>;
 			gpios = <&pio 4 GPIO_ACTIVE_LOW>;
-			linux,default-trigger = "phy1tpt";
 		};
 	};
 
@@ -135,6 +130,17 @@
 		reg = <15>;
 		pinctrl-names = "i2p5gbe-led";
 		pinctrl-0 = <&i2p5gbe_led0_pins>;
+
+		leds {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			led@0 {
+				reg = <0>;
+				function = LED_FUNCTION_WAN;
+				color = <LED_COLOR_ID_RED>;
+			};
+		};
 	};
 };
 
@@ -148,7 +154,7 @@
 	vmmc-supply = <&reg_3p3v>;
 	non-removable;
 	status = "okay";
-	
+
 	card@0 {
 		compatible = "mmc-card";
 		reg = <0>;
@@ -180,20 +186,20 @@
 	pinctrl-0 = <&pcie0_pins>;
 	reset-gpios = <&pio 36 GPIO_ACTIVE_HIGH>;
 	status = "okay";
-	
+
 	pcie@0,0 {
 		reg = <0x0000 0 0 0 0>;
 		#address-cells = <3>;
 		#size-cells = <2>;
 		device_type = "pci";
 
-		mt76@0,0 {
+		mt7992@0,0 {
 			compatible = "mediatek,mt76";
 			reg = <0x0000 0 0 0 0>;
 
 			nvmem-cells = <&eeprom_factory_0>;
 			nvmem-cell-names = "eeprom";
-			
+
 			#address-cells = <1>;
 			#size-cells = <0>;
 

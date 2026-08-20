@@ -6,9 +6,9 @@ PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL=$(PROJECT_GIT)/project/firmware/qca-wireless.git
-PKG_SOURCE_DATE:=2026-05-05
-PKG_SOURCE_VERSION:=fc4cf4873873b20e454fba257452cd31fec502bb
-PKG_MIRROR_HASH:=9e02a31c27234f7570743578b473c597b69c89e244696de5b0bee87f4009c23c
+PKG_SOURCE_DATE:=2026-08-15
+PKG_SOURCE_VERSION:=ec3c6fec867e891cb6f0b1ecf7f34ede8730c793
+PKG_MIRROR_HASH:=d35ea28f534e2f72b51ad8295aa114fcb6ec6a2ee3a6bb499f3923f68bf04d1e
 PKG_FLAGS:=nonshared
 
 include $(INCLUDE_DIR)/package.mk
@@ -56,6 +56,7 @@ ALLWIFIBOARDS:= \
 	linksys_mr6350 \
 	linksys_mr7350 \
 	linksys_mr7500 \
+	linksys_mr9000 \
 	linksys_mx2000 \
 	linksys_mx4200 \
 	linksys_mx5300 \
@@ -94,17 +95,20 @@ ALLWIFIBOARDS:= \
 	tplink_deco-x80-5g \
 	tplink_eap225-wall-v2 \
 	tplink_eap610-outdoor \
+	tplink_eap620-hd-v2 \
 	tplink_eap620-hd-v3 \
 	tplink_eap620hd-v1 \
 	tplink_eap623-outdoor-hd-v1 \
 	tplink_eap625-outdoor-hd-v1 \
 	tplink_eap660hd-v1 \
 	tplink_tl-wa1201-v2 \
+	ubnt_utr \
 	wallys_dr40x9 \
 	xiaomi_aiot-ac2350 \
 	xiaomi_ax3600 \
 	xiaomi_ax6000 \
 	xiaomi_ax9000 \
+	xiaomi_redmi-ax5400 \
 	yuncore_ax830 \
 	yuncore_ax850 \
 	yuncore_ax880 \
@@ -251,6 +255,7 @@ $(eval $(call generate-ipq-wifi-package,linksys_mr5500,Linksys MR5500))
 $(eval $(call generate-ipq-wifi-package,linksys_mr6350,Linksys MR6350))
 $(eval $(call generate-ipq-wifi-package,linksys_mr7350,Linksys MR7350))
 $(eval $(call generate-ipq-wifi-package,linksys_mr7500,Linksys MR7500))
+$(eval $(call generate-ipq-wifi-package,linksys_mr9000,Linksys MR9000))
 $(eval $(call generate-ipq-wifi-package,linksys_mx2000,Linksys MX2000))
 $(eval $(call generate-ipq-wifi-package,linksys_mx4200,Linksys MX4200))
 $(eval $(call generate-ipq-wifi-package,linksys_mx5300,Linksys MX5300))
@@ -289,17 +294,20 @@ $(eval $(call generate-ipq-wifi-package,tplink_archer-c60-v2,TP-Link Archer C60 
 $(eval $(call generate-ipq-wifi-package,tplink_deco-x80-5g,TP-Link Deco X80-5G))
 $(eval $(call generate-ipq-wifi-package,tplink_eap225-wall-v2,TP-Link EAP225-Wall v2))
 $(eval $(call generate-ipq-wifi-package,tplink_eap610-outdoor,TPLink EAP610-Outdoor))
+$(eval $(call generate-ipq-wifi-package,tplink_eap620-hd-v2,TP-Link EAP620 HD v2))
 $(eval $(call generate-ipq-wifi-package,tplink_eap620-hd-v3,TP-Link EAP620 HD v3))
 $(eval $(call generate-ipq-wifi-package,tplink_eap620hd-v1,TP-Link EAP620 HD v1))
 $(eval $(call generate-ipq-wifi-package,tplink_eap623-outdoor-hd-v1,TP-Link EAP623-Outdoor HD v1))
 $(eval $(call generate-ipq-wifi-package,tplink_eap625-outdoor-hd-v1,TP-Link EAP625-Outdoor HD v1))
 $(eval $(call generate-ipq-wifi-package,tplink_eap660hd-v1,TP-Link EAP660 HD v1))
 $(eval $(call generate-ipq-wifi-package,tplink_tl-wa1201-v2,TP-Link TL-WA1201 V2))
+$(eval $(call generate-ipq-wifi-package,ubnt_utr,Ubiquiti UniFi Travel Router))
 $(eval $(call generate-ipq-wifi-package,wallys_dr40x9,Wallys DR40X9))
 $(eval $(call generate-ipq-wifi-package,xiaomi_aiot-ac2350,Xiaomi AIoT AC2350))
 $(eval $(call generate-ipq-wifi-package,xiaomi_ax3600,Xiaomi AX3600))
 $(eval $(call generate-ipq-wifi-package,xiaomi_ax6000,Xiaomi AX6000))
 $(eval $(call generate-ipq-wifi-package,xiaomi_ax9000,Xiaomi AX9000))
+$(eval $(call generate-ipq-wifi-package,xiaomi_redmi-ax5400,Xiaomi Redmi AX5400))
 $(eval $(call generate-ipq-wifi-package,yuncore_ax830,Yuncore AX830))
 $(eval $(call generate-ipq-wifi-package,yuncore_ax850,Yuncore AX850))
 $(eval $(call generate-ipq-wifi-package,yuncore_ax880,Yuncore AX880))
