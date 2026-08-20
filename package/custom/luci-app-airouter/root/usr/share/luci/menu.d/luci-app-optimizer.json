@@ -1,0 +1,10 @@
+{
+	"admin/network/optimizer": {
+		"title": "Optimizer",
+		"action": {
+			"type": "view",
+			"path": "airouter/optimizer"
+		},
+		"order": 90
+	}
+}

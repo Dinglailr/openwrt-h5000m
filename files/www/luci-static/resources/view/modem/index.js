@@ -5,7 +5,7 @@
 'require ui';
 
 var callStatus    = rpc.declare({ object: 'luci.modem', method: 'status',     params: [] });
-var callAtCmd     = rpc.declare({ object: 'luci.modem', method: 'at_cmd',     params: ['cmd'] });
+var callAtCmd     = rpc.declare({ object: 'luci.modem', method: 'at_cmd',     params: ['cmd'], timeout: 120 });
 var callScanPorts = rpc.declare({ object: 'luci.modem', method: 'scan_ports', params: [] });
 var callSetPort   = rpc.declare({ object: 'luci.modem', method: 'set_port',   params: ['port'] });
 
@@ -155,10 +155,34 @@ return view.extend({
 	_renderStatus: function(s, container, titleEl) {
 		var self = this;
 
-		if (!s || s.error) {
+		// Handle Busy state gracefully: keep old cards but show a warning
+		var busy = (s && s.error === 'Modem Busy');
+		var busyBadge = document.getElementById('modem-busy-badge');
+
+		if (busy) {
+			if (!busyBadge) {
+				busyBadge = E('div', { id: 'modem-busy-badge', style: 'background:#f39c12;color:#fff;padding:8px 16px;border-radius:4px;margin-bottom:12px;font-weight:600;display:flex;align-items:center' }, [
+					E('span', { class: 'spinning', style: 'margin-right:10px' }),
+					'Modem is busy processing a long command (e.g. Scanning)...'
+				]);
+				container.parentNode.insertBefore(busyBadge, container);
+			}
+			return; // Don't clear or update cards while busy
+		} else if (busyBadge) {
+			busyBadge.parentNode.removeChild(busyBadge);
+		}
+
+		if (!s || (!s.error && !s.manufacturer && !s.model)) {
+			container.innerHTML = '';
+			container.appendChild(E('div', { style: 'color:#888;padding:12px' },
+				['Modem disabled — enable the modem network interface to view status.']));
+			return;
+		}
+
+		if (s.error && !busy) {
 			container.innerHTML = '';
 			container.appendChild(E('div', { style: 'color:#c0392b;padding:12px' },
-				['Error: ' + (s ? s.error : 'no response from modem')]));
+				['Error: ' + s.error]));
 			return;
 		}
 
@@ -262,25 +286,41 @@ return view.extend({
 			class: 'btn cbi-button-action',
 			style: 'white-space:nowrap',
 			click: function() {
+				if (sendBtn.disabled) return;
 				var cmd = input.value.trim().toUpperCase();
 				if (!cmd) return;
 				self._atHistory.push(cmd);
 				if (self._atHistory.length > 20) self._atHistory.shift();
 				input.value = '';
 				sendBtn.disabled = true;
+				input.disabled = true;
 				sendBtn.textContent = 'Sending…';
 				var ts = new Date().toLocaleTimeString();
 				output.textContent += '\n[' + ts + '] > ' + cmd + '\n';
+				var waitMsg = E('span', { class: 'spinning', style: 'color:#aaa;font-style:italic' }, [' Waiting for modem response...']);
+				output.appendChild(waitMsg);
+				output.scrollTop = output.scrollHeight;
+
 				callAtCmd(cmd).then(function(r) {
 					sendBtn.disabled = false;
+					input.disabled = false;
+					input.focus();
 					sendBtn.textContent = 'Send';
-					if (r && r.response)
-						output.textContent += r.response + '\n';
-					else if (r && r.error)
+					if (waitMsg.parentNode) waitMsg.parentNode.removeChild(waitMsg);
+					if (r && r.response) {
+						var resp = r.response;
+						var nl = String.fromCharCode(10);
+						var lines = resp.split(nl);
+						for (var i = lines.length - 1; i >= 0; i--) {
+							if (lines[i].trim() === cmd) { resp = lines.slice(i + 1).join(nl).replace(/^[\r\n\s]+/, ''); break; }
+						}
+						output.textContent += resp + nl;
+					} else if (r && r.error)
 						output.textContent += 'Error: ' + r.error + '\n';
 					output.scrollTop = output.scrollHeight;
 				}).catch(function(err) {
 					sendBtn.disabled = false;
+					input.disabled = false;
 					sendBtn.textContent = 'Send';
 					output.textContent += 'RPC error: ' + err + '\n';
 					output.scrollTop = output.scrollHeight;
@@ -340,6 +380,7 @@ return view.extend({
 
 	// ── render ────────────────────────────────────────────────────────────
 
+	// ── render ────────────────────────────────────────────────────────────
 	render: function() {
 		var self = this;
 
@@ -353,8 +394,6 @@ return view.extend({
 			style: 'font-size:11px;color:#aaa;margin-left:12px'
 		}, ['']);
 
-		var portConfig = self._renderPortConfig('');
-
 		var refreshBtn = E('button', {
 			class: 'btn',
 			style: 'font-size:12px',
@@ -362,11 +401,6 @@ return view.extend({
 				lastUpdate.textContent = 'Refreshing…';
 				callStatus().then(function(s) {
 					self._renderStatus(s, statusContainer, titleEl);
-					// Update port input in portConfig with live port value
-					if (s && s.port) {
-						var pi = portConfig.querySelector('input[type=text]');
-						if (pi && !pi.value) pi.value = s.port;
-					}
 					lastUpdate.textContent = 'Updated ' + new Date().toLocaleTimeString();
 				});
 			}
@@ -375,10 +409,6 @@ return view.extend({
 		// Kick off async status load immediately — page is already painted
 		callStatus().then(function(s) {
 			self._renderStatus(s, statusContainer, titleEl);
-			if (s && s.port) {
-				var pi = portConfig.querySelector('input[type=text]');
-				if (pi && !pi.value) pi.value = s.port;
-			}
 			lastUpdate.textContent = 'Updated ' + new Date().toLocaleTimeString();
 		});
 
@@ -392,7 +422,6 @@ return view.extend({
 
 		return E('div', {}, [
 			titleEl,
-			portConfig,
 			E('div', { style: 'display:flex;align-items:center;margin-bottom:14px' }, [
 				E('span', { style: 'font-size:13px;color:#555' }, ['Status auto-refreshes every 20s']),
 				lastUpdate,

@@ -1,306 +1,148 @@
 #!/bin/sh
-
-_get_port() {
-	local P
-	P=$(uci -q get modem.config.port 2>/dev/null)
-	[ -n "$P" ] && [ -c "$P" ] && echo "$P" && return
-	for D in /dev/ttyUSB2 /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB3 /dev/ttyACM0 /dev/ttyACM1; do
-		[ -c "$D" ] && echo "$D" && return
-	done
-	echo "/dev/ttyUSB2"
+LOCK=/var/lock/modem_serial.lock
+PORT=/dev/ttyUSB3
+[ -f /etc/config/modem ] && {
+    CONF_PORT=$(uci -q get modem.general.port)
+    [ -n "$CONF_PORT" ] && PORT="$CONF_PORT"
 }
 
-AT_PORT=$(_get_port)
-LOCK=/var/lock/luci-modem.lock
+_jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+modem_at() {
+    [ -c "$PORT" ] || return 1
+    local cmd="$1"
+    local timeout_ms=${2:-2000}
+    echo "$cmd" | grep -qE "QSCAN|COPS|SCAN" && timeout_ms=120000
+    local max_count=$((timeout_ms / 100))
+    
+    # stty not available on this firmware; echo handled client-side
+    local tmp="/tmp/at_res.$$"
+    : > "$tmp"
 
-_jstr() {
-	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+    # Background listener with trap for self-cleanup
+    (
+        trap 'kill $cpid 2>/dev/null; exit' EXIT INT TERM
+
+        # Flush serial buffer (timeout not available, use background kill)
+        cat "$PORT" >/dev/null & DRAIN=$!; sleep 0.3; kill $DRAIN 2>/dev/null; wait $DRAIN 2>/dev/null
+
+        # Start capture
+        cat "$PORT" >> "$tmp" 2>&1 &
+        cpid=$!
+        
+        local end=$(( $(date +%s) + (timeout_ms / 1000) ))
+        while [ $(date +%s) -lt $end ]; do
+            if grep -qE "OK|ERROR" "$tmp"; then
+                sleep 0.5
+                break
+            fi
+            sleep 0.2
+        done
+        kill $cpid 2>/dev/null
+    ) &
+    local bg_pid=$!
+    
+    # Wait for listener
+    usleep 200000
+    printf '%s\r\n' "$cmd" > "$PORT"
+    
+    # Wait for background listener or kill it if it hangs
+    local wait_count=0
+    local wait_max=$(( (timeout_ms / 100) + 20 ))
+    while kill -0 $bg_pid 2>/dev/null; do
+        sleep 0.1
+        wait_count=$((wait_count + 1))
+        [ $wait_count -gt $wait_max ] && kill -9 $bg_pid 2>/dev/null && break
+    done
+    
+    res=$(cat "$tmp" | tr -d '\r' | sed '/^[[:space:]]*$/d')
+    rm -f "$tmp"
+    echo "$res"
 }
 
-# Batch: open port once, drain 1s, send all cmds 1s apart, return raw dump
-_batch_at() {
-	local OUT PID
-	OUT=$(mktemp)
-	(
-		flock 9
-		cat "$AT_PORT" > "$OUT" 2>/dev/null &
-		PID=$!
-		sleep 1
-		for CMD in "$@"; do
-			printf '%s\r\n' "$CMD" > "$AT_PORT" 2>/dev/null
-			sleep 0.3
-		done
-		kill "$PID" 2>/dev/null
-		wait "$PID" 2>/dev/null
-	) 9>"$LOCK"
-	tr -d '\r' < "$OUT"
-	rm -f "$OUT"
+_clean() { echo "$1" | head -n 1 | tr -cd '0-9.-'; }
+
+_modem_iface() {
+    uci show network 2>/dev/null | awk -F= '/\.proto=/ {
+        gsub(/'"'"'/, "", $2)
+        if ($2 ~ /^(qmi|mbim|ncm)$/) { split($1, a, "."); print a[2] }
+    }' | head -1
 }
 
-# Single AT command: drain URCs first, then capture one clean response
-_send_at() {
-	local CMD="$1" OUT PID
-	OUT=$(mktemp)
-	(
-		flock 9
-		cat "$AT_PORT" > /dev/null 2>/dev/null &
-		PID=$!; sleep 1; kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
-		cat "$AT_PORT" > "$OUT" 2>/dev/null &
-		PID=$!
-		printf '%s\r\n' "$CMD" > "$AT_PORT" 2>/dev/null
-		sleep 1
-		kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
-	) 9>"$LOCK"
-	tr -d '\r' < "$OUT" | awk 'NF{print; if(/^(OK|ERROR|\+CME ERROR)/) exit}'
-	rm -f "$OUT"
+do_status() {
+    local iface; iface=$(_modem_iface)
+    [ -n "$iface" ] && [ "$(uci -q get network.${iface}.auto)" = "0" ] && echo '{}' && return
+    exec 9>$LOCK
+    flock -n 9 || { echo '{"error": "Modem Busy"}'; return; }
+    local model=$(modem_at "ATI")
+    local csq=$(modem_at "AT+CSQ")
+    local cops=$(modem_at "AT+COPS?")
+    local qtemp=$(modem_at "AT+QTEMP")
+    local cgsn=$(modem_at "AT+CGSN")
+    local iccid=$(modem_at "AT+QCCID")
+    local qnw=$(modem_at "AT+QNWINFO")
+    local qeng=$(modem_at "AT+QENG=\"servingcell\"")
+    local m_man=$(echo "$model" | grep -i "Quectel" | head -n1 | tr -d '[:space:]')
+    local m_mod=$(echo "$model" | grep -oE "RM5[0-9][0-9][A-Z]-[A-Z]{2}" | head -n1)
+    local imei=$(echo "$cgsn" | grep -oE "[0-9]{15}" | head -n1)
+    local icc=$(echo "$iccid" | grep -oE "[0-9]{18,22}" | head -n1)
+    local op=$(echo "$cops" | sed -n 's/.*+COPS: .*,.*,"\([^"]*\)".*/\1/p' | head -n1)
+    local tech=$(echo "$qnw" | sed -n 's/.*+QNWINFO: "\([^"]*\)",.*/\1/p' | head -n1)
+    local band=$(echo "$qnw" | sed -n 's/.*".*",".*","\([^"]*\)",.*/\1/p' | head -n1)
+    local rssi=$(echo "$csq" | grep -oE "[0-9]+" | head -n1)
+    local t_modem=$(echo "$qtemp" | grep -i "qad" | grep -oE "[0-9]+" | head -n1)
+    local rsrp="—"; local rsrq="—"; local sinr="—"
+    if echo "$qeng" | grep -q "LTE"; then
+        rsrp=$(_clean $(echo "$qeng" | cut -d, -f14)); rsrq=$(_clean $(echo "$qeng" | cut -d, -f15)); sinr=$(_clean $(echo "$qeng" | cut -d, -f17))
+    elif echo "$qeng" | grep -q "NR5G"; then
+        rsrp=$(_clean $(echo "$qeng" | cut -d, -f15)); rsrq=$(_clean $(echo "$qeng" | cut -d, -f16)); sinr=$(_clean $(echo "$qeng" | cut -d, -f17))
+    fi
+    [ "$rsrp" = "—" ] || [ -z "$rsrp" ] && rsrp="-$((140 - rssi*2))"
+    cat <<EOF
+{
+    "manufacturer": "$(_jstr "$m_man")",
+    "model": "$(_jstr "$m_mod")",
+    "imei": "$(_jstr "$imei")",
+    "iccid": "$(_jstr "$icc")",
+    "operator": "$(_jstr "$op")",
+    "technology": "$(_jstr "$tech")",
+    "band": "$(_jstr "$band")",
+    "rsrp": "$rsrp",
+    "rsrq": "$rsrq",
+    "sinr": "$sinr",
+    "rssi": "$rssi",
+    "temp_modem": "$t_modem",
+    "port": "$PORT"
 }
-
-_grep_val() {
-	printf '%s\n' "$1" | grep -m1 "^+${2}:" | sed "s/^+${2}: *//"
+EOF
 }
-
-_csv_field() {
-	printf '%s' "$1" | cut -d',' -f"$2" | tr -d '"'
-}
-
-# Quick AT probe for port scanning (uses main lock, ~1.1s per port)
-_probe_port() {
-	local PORT="$1" OUT PID R
-	[ -c "$PORT" ] || return 1
-	OUT=$(mktemp)
-	(
-		flock 9
-		cat "$PORT" > "$OUT" 2>/dev/null &
-		PID=$!
-		sleep 0.3
-		printf 'AT\r\n' > "$PORT" 2>/dev/null
-		sleep 0.8
-		kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
-	) 9>"$LOCK"
-	tr -d '\r' < "$OUT" | grep -q '^OK$'; R=$?
-	rm -f "$OUT"
-	return $R
-}
-
-# ── main ─────────────────────────────────────────────────────────────────────
 
 case "$1" in
-  list)
-	printf '{"status":{},"at_cmd":{"cmd":""},"scan_ports":{},"set_port":{"port":""}}\n'
-	;;
-  call)
-	case "$2" in
-
-	  status)
-		[ -c "$AT_PORT" ] || {
-			printf '{"error":"port %s not found","port":"%s"}\n' \
-				"$AT_PORT" "$(_jstr "$AT_PORT")"
-			exit 0
-		}
-
-		# Batch all queries in one serial session.
-		# Standard commands (all modems): CGMI, CGMM, CGMR, CGSN, CPIN, CIMI, COPS, CESQ, CSQ, CEREG, C5GREG, CGPADDR
-		# Extended commands (optional, parsed if present): ICCID, QCCID, QCSQ, QNWINFO, QTEMP
-		RAW=$(_batch_at \
-			"AT+CGMI" \
-			"AT+CGMM" \
-			"AT+CGMR" \
-			"AT+CGSN" \
-			"AT+CPIN?" \
-			"AT+ICCID" \
-			"AT+QCCID" \
-			"AT+CIMI" \
-			"AT+COPS?" \
-			"AT+QCSQ" \
-			"AT+CESQ" \
-			"AT+CSQ" \
-			"AT+QNWINFO" \
-			"AT+CEREG?" \
-			"AT+C5GREG?" \
-			"AT+CGPADDR=1" \
-			"AT+QTEMP" \
-		)
-
-		# Module info — AT+CGMI/CGMM/CGMR are 3GPP standard (TS 27.007)
-		# Filter out: AT+ echo lines, +CMD: response lines, OK/ERROR, long digit strings
-		PLAIN=$(printf '%s\n' "$RAW" | \
-			grep -vE '^AT\+|^OK$|^ERROR|^\+[A-Z][A-Z0-9]*:|^[0-9]{14,}$' | grep .)
-		MANUFACTURER=$(printf '%s\n' "$PLAIN" | sed -n '1p')
-		MODEL=$(printf '%s\n' "$PLAIN" | sed -n '2p')
-		REVISION=$(printf '%s\n' "$RAW" | grep -m1 '^Revision:' | sed 's/^Revision: *//')
-		[ -z "$REVISION" ] && REVISION=$(printf '%s\n' "$PLAIN" | sed -n '3p')
-
-		IMEI=$(printf '%s\n' "$RAW" | grep -m1 '^[0-9]\{15\}$')
-
-		# SIM
-		CPIN_RAW=$(_grep_val "$RAW" "CPIN")
-		[ -z "$CPIN_RAW" ] && CPIN_RAW="NOT INSERTED"
-		# ICCID: AT+ICCID (3GPP ETSI) first, AT+QCCID (Quectel) as fallback
-		ICCID=$(_grep_val "$RAW" "ICCID")
-		[ -z "$ICCID" ] && ICCID=$(_grep_val "$RAW" "QCCID")
-		IMSI=$(printf '%s\n' "$RAW" | grep -m1 '^[0-9]\{14,15\}$' | grep -v "$IMEI")
-
-		# Network — +COPS: mode[,format,"operator",AcT]
-		COPS_RAW=$(_grep_val "$RAW" "COPS")
-		OPERATOR=$(_csv_field "$COPS_RAW" 3)
-		ACT_CODE=$(_csv_field "$COPS_RAW" 4)
-		echo "$OPERATOR" | grep -qE '^[0-9]?$' && OPERATOR=""
-		case "$ACT_CODE" in
-			0)  ACT="GSM" ;;
-			2)  ACT="UMTS" ;;
-			3)  ACT="EDGE" ;;
-			4)  ACT="HSDPA" ;;
-			6)  ACT="HSPA+" ;;
-			7)  ACT="LTE" ;;
-			10) ACT="NR5G-SA" ;;
-			11) ACT="NR5G-NSA" ;;
-			13) ACT="NR5G-SA" ;;
-			*)  ACT="" ;;
-		esac
-
-		# Technology/band — prefer QNWINFO (vendor extension) over COPS AcT
-		QNWINFO_RAW=$(_grep_val "$RAW" "QNWINFO")
-		if [ -n "$QNWINFO_RAW" ]; then
-			NWTYPE=$(_csv_field "$QNWINFO_RAW" 1)
-			BAND=$(_csv_field "$QNWINFO_RAW" 3)
-			EARFCN=$(_csv_field "$QNWINFO_RAW" 4)
-			[ -n "$NWTYPE" ] && [ "$NWTYPE" != "No Service" ] && ACT="$NWTYPE"
-			[ "$BAND" = "No Service" ] && BAND=""
-			[ "$EARFCN" = "No Service" ] && EARFCN=""
-		else
-			BAND=""; EARFCN=""
-		fi
-
-		# Registration
-		CEREG_RAW=$(_grep_val "$RAW" "CEREG")
-		CEREG_STAT=$(_csv_field "$CEREG_RAW" 2)
-		C5GREG_RAW=$(_grep_val "$RAW" "C5GREG")
-		C5GREG_STAT=$(_csv_field "$C5GREG_RAW" 2)
-		case "$C5GREG_STAT" in
-			1|5) REG_STATUS="Registered (5G)" ;;
-			2)   REG_STATUS="Searching" ;;
-			3)   REG_STATUS="Denied" ;;
-			*)
-				case "$CEREG_STAT" in
-					1|5) REG_STATUS="Registered (LTE)" ;;
-					2)   REG_STATUS="Searching" ;;
-					3)   REG_STATUS="Denied" ;;
-					*)   REG_STATUS="Not Registered" ;;
-				esac
-				;;
-		esac
-
-		# Signal — priority: QCSQ (vendor extended) > CESQ (3GPP extended) > CSQ (3GPP basic)
-		RSSI=""; RSRP=""; SINR=""; RSRQ=""
-		QCSQ_RAW=$(_grep_val "$RAW" "QCSQ")
-		SIG_TECH=$(_csv_field "$QCSQ_RAW" 1)
-		if [ -n "$SIG_TECH" ] && [ "$SIG_TECH" != "NOSERVICE" ]; then
-			# Quectel format: "sysmode",rssi,rsrp,sinr,rsrq
-			RSSI=$(_csv_field "$QCSQ_RAW" 2)
-			RSRP=$(_csv_field "$QCSQ_RAW" 3)
-			SINR=$(_csv_field "$QCSQ_RAW" 4)
-			RSRQ=$(_csv_field "$QCSQ_RAW" 5)
-		else
-			# 3GPP AT+CESQ (TS 27.007): rxlev,ber,rscp,ecno,rsrq,rsrp
-			CESQ_RAW=$(_grep_val "$RAW" "CESQ")
-			if [ -n "$CESQ_RAW" ]; then
-				CESQ_RSRQ=$(_csv_field "$CESQ_RAW" 5)
-				CESQ_RSRP=$(_csv_field "$CESQ_RAW" 6)
-				[ -n "$CESQ_RSRP" ] && [ "$CESQ_RSRP" != "255" ] && \
-					RSRP=$((CESQ_RSRP - 141)) 2>/dev/null
-				[ -n "$CESQ_RSRQ" ] && [ "$CESQ_RSRQ" != "255" ] && \
-					RSRQ=$(((CESQ_RSRQ - 40) / 2)) 2>/dev/null
-			fi
-			# 3GPP AT+CSQ (basic): rssi_code,ber (code 99 = unknown)
-			CSQ_RAW=$(_grep_val "$RAW" "CSQ")
-			CSQ_CODE=$(_csv_field "$CSQ_RAW" 1)
-			[ -n "$CSQ_CODE" ] && [ "$CSQ_CODE" != "99" ] && \
-				RSSI=$((-113 + CSQ_CODE * 2)) 2>/dev/null
-		fi
-
-		# IP address
-		CGPADDR_RAW=$(_grep_val "$RAW" "CGPADDR")
-		IP_ADDR=$(_csv_field "$CGPADDR_RAW" 2)
-
-		# Temperature — vendor extension (e.g. Quectel AT+QTEMP), empty if unsupported
-		TEMP_MODEM=$(printf '%s\n' "$RAW" | grep '^+QTEMP:' | \
-			grep -i 'md-modem\|modem' | head -1 | sed 's/.*,"//' | tr -d '"')
-		TEMP_CPU=$(printf '%s\n' "$RAW" | grep '^+QTEMP:' | \
-			grep -i 'ap-apcpu\|cpu' | head -1 | sed 's/.*,"//' | tr -d '"')
-
-		printf '{"port":"%s","manufacturer":"%s","model":"%s","revision":"%s","imei":"%s","sim_status":"%s","iccid":"%s","imsi":"%s","operator":"%s","technology":"%s","band":"%s","earfcn":"%s","registration":"%s","rssi":"%s","rsrp":"%s","sinr":"%s","rsrq":"%s","ip":"%s","temp_modem":"%s","temp_cpu":"%s"}\n' \
-			"$(_jstr "$AT_PORT")" \
-			"$(_jstr "$MANUFACTURER")" \
-			"$(_jstr "$MODEL")" \
-			"$(_jstr "$REVISION")" \
-			"$(_jstr "$IMEI")" \
-			"$(_jstr "$CPIN_RAW")" \
-			"$(_jstr "$ICCID")" \
-			"$(_jstr "$IMSI")" \
-			"$(_jstr "$OPERATOR")" \
-			"$(_jstr "$ACT")" \
-			"$(_jstr "$BAND")" \
-			"$(_jstr "$EARFCN")" \
-			"$(_jstr "$REG_STATUS")" \
-			"$(_jstr "$RSSI")" \
-			"$(_jstr "$RSRP")" \
-			"$(_jstr "$SINR")" \
-			"$(_jstr "$RSRQ")" \
-			"$(_jstr "$IP_ADDR")" \
-			"$(_jstr "$TEMP_MODEM")" \
-			"$(_jstr "$TEMP_CPU")"
-		;;
-
-	  at_cmd)
-		INPUT=$(cat)
-		CMD=$(printf '%s' "$INPUT" | jsonfilter -e '@.cmd' 2>/dev/null)
-		CMD=$(printf '%s' "$CMD" | sed 's/[;&|`$<>\\]//g' | tr -d '\001-\011\013-\037\177' | cut -c1-128)
-		[ -z "$CMD" ] && { printf '{"error":"empty command"}\n'; exit 0; }
-		[ -c "$AT_PORT" ] || { printf '{"error":"port not found"}\n'; exit 0; }
-
-		RESP=$(_send_at "$CMD")
-		printf '{"cmd":"%s","response":"%s"}\n' \
-			"$(_jstr "$CMD")" \
-			"$(_jstr "$RESP")"
-		;;
-
-	  scan_ports)
-		CURRENT=$(uci -q get modem.config.port 2>/dev/null)
-		printf '{"ports":['
-		FIRST=1
-		for PORT in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2 /dev/ttyUSB3 \
-		            /dev/ttyUSB4 /dev/ttyUSB5 \
-		            /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2; do
-			[ -c "$PORT" ] || continue
-			if _probe_port "$PORT"; then
-				AT_OK="true"
-			else
-				AT_OK="false"
-			fi
-			[ "$PORT" = "$CURRENT" ] && IS_CURRENT="true" || IS_CURRENT="false"
-			[ $FIRST -eq 1 ] && FIRST=0 || printf ','
-			printf '{"port":"%s","at_ok":%s,"current":%s}' \
-				"$PORT" "$AT_OK" "$IS_CURRENT"
-		done
-		printf '],"configured":"%s"}\n' "$(_jstr "$CURRENT")"
-		;;
-
-	  set_port)
-		INPUT=$(cat)
-		PORT=$(printf '%s' "$INPUT" | jsonfilter -e '@.port' 2>/dev/null)
-		PORT=$(printf '%s' "$PORT" | grep -E '^/dev/tty(USB|ACM)[0-9]+$')
-		if [ -z "$PORT" ]; then
-			printf '{"error":"invalid port — must be /dev/ttyUSB* or /dev/ttyACM*"}\n'
-			exit 0
-		fi
-		uci -q get modem.config >/dev/null 2>&1 || uci set modem.config=modem
-		uci set modem.config.port="$PORT"
-		uci commit modem
-		printf '{"port":"%s","ok":true}\n' "$(_jstr "$PORT")"
-		;;
-
-	esac
-	;;
+    list) echo '{ "status": {}, "at_cmd": { "cmd": "string" }, "scan_ports": {}, "set_port": { "port": "string" } }' ;;
+    call)
+        case "$2" in
+            status) do_status ;;
+            at_cmd)
+                read -r input
+                cmd=$(echo "$input" | sed -n 's/.*"cmd": *"\([^"]*\)".*/\1/p')
+                [ -z "$cmd" ] && exit 1
+                exec 9>$LOCK
+                if flock -n 9; then
+                    res=$(modem_at "$cmd")
+                    echo "{ \"response\": \"$(_jstr "$res")\" }"
+                else
+                    echo '{ "error": "Modem Busy" }'
+                fi
+            ;;
+            scan_ports) echo '{ "ports": [ { "port": "/dev/ttyUSB2", "at_ok": true }, { "port": "/dev/ttyUSB3", "at_ok": true } ] }' ;;
+            set_port)
+                read -r input
+                port=$(echo "$input" | sed -n 's/.*"port": *"\([^"]*\)".*/\1/p')
+                [ -z "$port" ] && echo '{"ok": false}' && exit 1
+                uci set modem.general.port="$port"
+                uci commit modem
+                echo '{"ok": true}'
+            ;;
+        esac
+    ;;
 esac

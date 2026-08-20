@@ -1,0 +1,28 @@
+{
+	"luci-app-airouter": {
+		"description": "Grant access to AI Router procedures",
+		"read": {
+			"ubus": {
+				"luci.airouter": [
+					"list",
+					"ask",
+					"clear"
+				]
+			},
+			"uci": [
+				"airouter"
+			]
+		},
+		"write": {
+			"ubus": {
+				"luci.airouter": [
+					"ask",
+					"clear"
+				]
+			},
+			"uci": [
+				"airouter"
+			]
+		}
+	}
+}

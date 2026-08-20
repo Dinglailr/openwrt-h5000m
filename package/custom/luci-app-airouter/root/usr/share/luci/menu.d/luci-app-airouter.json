@@ -1,0 +1,29 @@
+{
+	"admin/services/airouter": {
+		"title": "AI Router",
+		"action": {
+			"type": "alias",
+			"path": "admin/services/airouter/chat"
+		},
+		"order": 60,
+		"depends": {
+			"acl": [ "luci-app-airouter" ]
+		}
+	},
+	"admin/services/airouter/chat": {
+		"title": "Chat",
+		"action": {
+			"type": "view",
+			"path": "airouter/chat"
+		},
+		"order": 10
+	},
+	"admin/services/airouter/settings": {
+		"title": "Settings",
+		"action": {
+			"type": "view",
+			"path": "airouter/settings"
+		},
+		"order": 20
+	}
+}

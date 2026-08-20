@@ -47,20 +47,22 @@ _apply_profile() {
   local FILE="$PROFILES_DIR/${ID}.json"
   [ -f "$FILE" ] || return 1
 
-  local PRIVKEY ADDR DNS PUBKEY EP_HOST EP_PORT KEEPALIVE PSK
-  PRIVKEY=$(jsonfilter -i "$FILE" -e '@.private_key'         2>/dev/null)
-  ADDR=$(jsonfilter    -i "$FILE" -e '@.address'             2>/dev/null)
-  DNS=$(jsonfilter     -i "$FILE" -e '@.dns'                 2>/dev/null)
-  PUBKEY=$(jsonfilter  -i "$FILE" -e '@.peer_public_key'     2>/dev/null)
-  EP_HOST=$(jsonfilter -i "$FILE" -e '@.endpoint_host'       2>/dev/null)
-  EP_PORT=$(jsonfilter -i "$FILE" -e '@.endpoint_port'       2>/dev/null)
-  KEEPALIVE=$(jsonfilter -i "$FILE" -e '@.persistent_keepalive' 2>/dev/null)
-  PSK=$(jsonfilter     -i "$FILE" -e '@.preshared_key'       2>/dev/null)
-  NAME=$(jsonfilter    -i "$FILE" -e '@.name'                2>/dev/null)
+  local PRIVKEY ADDR DNS PUBKEY EP_HOST EP_PORT KEEPALIVE PSK ALLOWED_IPS
+  PRIVKEY=$(jsonfilter     -i "$FILE" -e '@.private_key'          2>/dev/null)
+  ADDR=$(jsonfilter        -i "$FILE" -e '@.address'              2>/dev/null)
+  DNS=$(jsonfilter         -i "$FILE" -e '@.dns'                  2>/dev/null)
+  PUBKEY=$(jsonfilter      -i "$FILE" -e '@.peer_public_key'      2>/dev/null)
+  EP_HOST=$(jsonfilter     -i "$FILE" -e '@.endpoint_host'        2>/dev/null)
+  EP_PORT=$(jsonfilter     -i "$FILE" -e '@.endpoint_port'        2>/dev/null)
+  KEEPALIVE=$(jsonfilter   -i "$FILE" -e '@.persistent_keepalive' 2>/dev/null)
+  PSK=$(jsonfilter         -i "$FILE" -e '@.preshared_key'        2>/dev/null)
+  NAME=$(jsonfilter        -i "$FILE" -e '@.name'                 2>/dev/null)
+  ALLOWED_IPS=$(jsonfilter -i "$FILE" -e '@.allowed_ips'          2>/dev/null)
 
-  [ -z "$EP_PORT" ]   && EP_PORT=51820
-  [ -z "$KEEPALIVE" ] && KEEPALIVE=25
-  [ -z "$DNS" ]       && DNS="1.1.1.1 8.8.8.8"
+  [ -z "$EP_PORT" ]     && EP_PORT=51820
+  [ -z "$KEEPALIVE" ]   && KEEPALIVE=25
+  [ -z "$DNS" ]         && DNS="1.1.1.1 8.8.8.8"
+  [ -z "$ALLOWED_IPS" ] && ALLOWED_IPS="10.0.0.0/24"
 
   # Interface section
   uci set "network.${WG_IFACE}=interface"
@@ -69,17 +71,28 @@ _apply_profile() {
   uci set "network.${WG_IFACE}.addresses=$ADDR"
   uci set "network.${WG_IFACE}.dns=$DNS"
 
-  # Peer section — delete and recreate
+  # Remove ALL existing peer sections (anonymous and named) to avoid duplicates
+  while uci -q get "network.@wireguard_${WG_IFACE}[0]" >/dev/null 2>&1; do
+    uci delete "network.@wireguard_${WG_IFACE}[0]"
+  done
   uci -q delete "network.${WG_IFACE}_peer"
+
+  # Create fresh named peer section
   uci set "network.${WG_IFACE}_peer=wireguard_${WG_IFACE}"
   uci set "network.${WG_IFACE}_peer.public_key=$PUBKEY"
   uci set "network.${WG_IFACE}_peer.endpoint_host=$EP_HOST"
   uci set "network.${WG_IFACE}_peer.endpoint_port=$EP_PORT"
   uci set "network.${WG_IFACE}_peer.persistent_keepalive=$KEEPALIVE"
-  uci set "network.${WG_IFACE}_peer.route_allowed_ips=0"
-  uci add_list "network.${WG_IFACE}_peer.allowed_ips=0.0.0.0/0"
+  uci set "network.${WG_IFACE}_peer.route_allowed_ips=1"
   uci set "network.${WG_IFACE}_peer.description=$NAME"
   [ -n "$PSK" ] && uci set "network.${WG_IFACE}_peer.preshared_key=$PSK"
+
+  # Apply allowed_ips (comma-separated in profile → multiple UCI list entries)
+  printf '%s' "$ALLOWED_IPS" | tr ',' '\n' | sed 's/[[:space:]]//g' | grep -v '^$' > /tmp/wg_ips_$$
+  while IFS= read -r _ip; do
+    uci add_list "network.${WG_IFACE}_peer.allowed_ips=$_ip"
+  done < /tmp/wg_ips_$$
+  rm -f /tmp/wg_ips_$$
 
   uci commit network
 }
@@ -110,21 +123,38 @@ _auto_import() {
   PRIVKEY=$(uci -q get "network.${WG_IFACE}.private_key" 2>/dev/null)
   ADDR=$(uci -q get    "network.${WG_IFACE}.addresses"   2>/dev/null)
   DNS=$(uci -q get     "network.${WG_IFACE}.dns"         2>/dev/null)
-  PUBKEY=$(uci -q get  "network.${WG_IFACE}_peer.public_key"          2>/dev/null)
-  EP_HOST=$(uci -q get "network.${WG_IFACE}_peer.endpoint_host"       2>/dev/null)
-  EP_PORT=$(uci -q get "network.${WG_IFACE}_peer.endpoint_port"       2>/dev/null)
-  KEEPALIVE=$(uci -q get "network.${WG_IFACE}_peer.persistent_keepalive" 2>/dev/null)
-  PSK=$(uci -q get     "network.${WG_IFACE}_peer.preshared_key"       2>/dev/null)
-  NAME=$(uci -q get    "network.${WG_IFACE}_peer.description"         2>/dev/null)
+  # Try named section first, then fall back to anonymous @wireguard_wg0[0]
+  PUBKEY=$(uci -q get    "network.${WG_IFACE}_peer.public_key"             2>/dev/null)
+  EP_HOST=$(uci -q get   "network.${WG_IFACE}_peer.endpoint_host"          2>/dev/null)
+  EP_PORT=$(uci -q get   "network.${WG_IFACE}_peer.endpoint_port"          2>/dev/null)
+  KEEPALIVE=$(uci -q get "network.${WG_IFACE}_peer.persistent_keepalive"   2>/dev/null)
+  PSK=$(uci -q get       "network.${WG_IFACE}_peer.preshared_key"          2>/dev/null)
+  NAME=$(uci -q get      "network.${WG_IFACE}_peer.description"            2>/dev/null)
+  if [ -z "$PUBKEY" ] || [ -z "$EP_HOST" ]; then
+    PUBKEY=$(uci -q get    "network.@wireguard_${WG_IFACE}[0].public_key"           2>/dev/null)
+    EP_HOST=$(uci -q get   "network.@wireguard_${WG_IFACE}[0].endpoint_host"        2>/dev/null)
+    EP_PORT=$(uci -q get   "network.@wireguard_${WG_IFACE}[0].endpoint_port"        2>/dev/null)
+    KEEPALIVE=$(uci -q get "network.@wireguard_${WG_IFACE}[0].persistent_keepalive" 2>/dev/null)
+    PSK=$(uci -q get       "network.@wireguard_${WG_IFACE}[0].preshared_key"        2>/dev/null)
+    NAME=$(uci -q get      "network.@wireguard_${WG_IFACE}[0].description"          2>/dev/null)
+  fi
   [ -z "$PUBKEY" ] || [ -z "$EP_HOST" ] && return
+  # Read allowed_ips list — UCI returns space-separated values for list options
+  local ALLOWED_IPS
+  ALLOWED_IPS=$(uci -q get "network.${WG_IFACE}_peer.allowed_ips" 2>/dev/null)
+  [ -z "$ALLOWED_IPS" ] && \
+    ALLOWED_IPS=$(uci -q get "network.@wireguard_${WG_IFACE}[0].allowed_ips" 2>/dev/null)
+  [ -z "$ALLOWED_IPS" ] && ALLOWED_IPS="10.0.0.0/24"
+  ALLOWED_IPS=$(printf '%s' "$ALLOWED_IPS" | tr ' ' ',')
+
   [ -z "$EP_PORT" ]   && EP_PORT=51820
   [ -z "$KEEPALIVE" ] && KEEPALIVE=25
   [ -z "$DNS" ]       && DNS="1.1.1.1 8.8.8.8"
   [ -z "$NAME" ]      && NAME="Imported (wg0)"
   mkdir -p "$PROFILES_DIR"
   local ID="imported-wg0"
-  printf '{"name":"%s","private_key":"%s","address":"%s","dns":"%s","peer_public_key":"%s","endpoint_host":"%s","endpoint_port":%s,"persistent_keepalive":%s,"preshared_key":"%s"}\n' \
-    "$NAME" "$PRIVKEY" "$ADDR" "$DNS" "$PUBKEY" "$EP_HOST" "$EP_PORT" "$KEEPALIVE" "$PSK" \
+  printf '{"name":"%s","private_key":"%s","address":"%s","dns":"%s","peer_public_key":"%s","endpoint_host":"%s","endpoint_port":%s,"persistent_keepalive":%s,"preshared_key":"%s","allowed_ips":"%s"}\n' \
+    "$NAME" "$PRIVKEY" "$ADDR" "$DNS" "$PUBKEY" "$EP_HOST" "$EP_PORT" "$KEEPALIVE" "$PSK" "$ALLOWED_IPS" \
     > "$PROFILES_DIR/${ID}.json"
   printf '%s' "$ID" > "$ACTIVE_FILE"
 }
@@ -133,7 +163,7 @@ _auto_import() {
 
 case "$1" in
   list)
-    echo '{"status":{},"enable":{},"disable":{},"list_profiles":{},"get_profile":{"id":""},"save_profile":{"id":"","name":"","private_key":"","address":"","dns":"","peer_public_key":"","endpoint_host":"","endpoint_port":0,"persistent_keepalive":0,"preshared_key":""},"delete_profile":{"id":""},"activate_profile":{"id":""}}'
+    echo '{"status":{},"enable":{},"disable":{},"list_profiles":{},"get_profile":{"id":""},"save_profile":{"id":"","name":"","private_key":"","address":"","dns":"","peer_public_key":"","endpoint_host":"","endpoint_port":0,"persistent_keepalive":0,"preshared_key":"","allowed_ips":""},"delete_profile":{"id":""},"activate_profile":{"id":""}}'
     ;;
   call)
     case "$2" in
@@ -206,23 +236,25 @@ case "$1" in
         PUBKEY=$(echo    "$INPUT" | jsonfilter -e '@.peer_public_key'     2>/dev/null)
         EP_HOST=$(echo   "$INPUT" | jsonfilter -e '@.endpoint_host'       2>/dev/null)
         EP_PORT=$(echo   "$INPUT" | jsonfilter -e '@.endpoint_port'       2>/dev/null)
-        KEEPALIVE=$(echo "$INPUT" | jsonfilter -e '@.persistent_keepalive' 2>/dev/null)
-        PSK=$(echo       "$INPUT" | jsonfilter -e '@.preshared_key'       2>/dev/null)
+        KEEPALIVE=$(echo    "$INPUT" | jsonfilter -e '@.persistent_keepalive' 2>/dev/null)
+        PSK=$(echo          "$INPUT" | jsonfilter -e '@.preshared_key'        2>/dev/null)
+        ALLOWED_IPS=$(echo  "$INPUT" | jsonfilter -e '@.allowed_ips'          2>/dev/null)
         ID=$(_safe_file_id "$(echo "$INPUT" | jsonfilter -e '@.id' 2>/dev/null)")
 
         [ -z "$NAME" ] || [ -z "$PRIVKEY" ] || [ -z "$ADDR" ] || \
         [ -z "$PUBKEY" ] || [ -z "$EP_HOST" ] && {
           echo '{"error":"name, private_key, address, peer_public_key, endpoint_host are required"}'; exit 0
         }
-        [ -z "$EP_PORT" ]   && EP_PORT=51820
-        [ -z "$KEEPALIVE" ] && KEEPALIVE=25
+        [ -z "$EP_PORT" ]     && EP_PORT=51820
+        [ -z "$KEEPALIVE" ]   && KEEPALIVE=25
+        [ -z "$ALLOWED_IPS" ] && ALLOWED_IPS="10.0.0.0/24"
         DNS=$(_norm_dns "${DNS:-1.1.1.1 8.8.8.8}")
         [ -z "$ID" ] && ID=$(_safe_id "$NAME")
         [ -z "$ID" ] && ID="wg-$(date +%s)"
 
         mkdir -p "$PROFILES_DIR"
-        printf '{"name":"%s","private_key":"%s","address":"%s","dns":"%s","peer_public_key":"%s","endpoint_host":"%s","endpoint_port":%s,"persistent_keepalive":%s,"preshared_key":"%s"}\n' \
-          "$NAME" "$PRIVKEY" "$ADDR" "$DNS" "$PUBKEY" "$EP_HOST" "$EP_PORT" "$KEEPALIVE" "$PSK" \
+        printf '{"name":"%s","private_key":"%s","address":"%s","dns":"%s","peer_public_key":"%s","endpoint_host":"%s","endpoint_port":%s,"persistent_keepalive":%s,"preshared_key":"%s","allowed_ips":"%s"}\n' \
+          "$NAME" "$PRIVKEY" "$ADDR" "$DNS" "$PUBKEY" "$EP_HOST" "$EP_PORT" "$KEEPALIVE" "$PSK" "$ALLOWED_IPS" \
           > "$PROFILES_DIR/${ID}.json"
 
         # Auto-activate if first profile or none active

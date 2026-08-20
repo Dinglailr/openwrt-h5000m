@@ -1,0 +1,40 @@
+#!/bin/sh
+. /usr/share/libubox/jshn.sh
+case "$1" in
+	list)
+		echo '{
+			"ask": { "message": "string", "provider": "string" },
+			"clear": {},
+			"get_ttl_status": {}
+		}'
+		exit 0
+		;;
+	call)
+		case "$2" in
+			get_ttl_status)
+				active_val=$(nft list chain inet fw4 ttl_mangle 2>/dev/null | grep "ip ttl set" | grep -oE "[0-9]+")
+				if [ -n "$active_val" ]; then
+					echo "{ \"status\": \"Active ($active_val)\" }"
+				else
+					echo '{ "status": "Disabled" }'
+				fi
+				exit 0
+				;;
+			ask)
+				read input
+				json_load "$input"
+				json_get_var msg "message"
+				json_get_var provider "provider"
+				reply=$(/usr/lib/ai-router/agent.sh run "$msg" "$provider")
+				escaped_reply=$(echo "$reply" | jq -Rs .)
+				echo "{ \"reply\": $escaped_reply }"
+				exit 0
+				;;
+			clear)
+				/usr/lib/ai-router/history.sh clear_history
+				echo '{ "status": "cleared" }'
+				exit 0
+				;;
+		esac
+		;;
+esac

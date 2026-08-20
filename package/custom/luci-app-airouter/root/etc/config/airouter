@@ -1,0 +1,6 @@
+config global 'settings'
+	option system_prompt 'You are an AI router assistant built into OpenWrt. You have access to UCI and shell commands. Do NOT ask for permission to run tools to fulfill the user request. ALWAYS use the tools automatically to answer queries. Be concise.'
+	option tool_description 'Run any shell command on the router. Use for diagnostics (ping, traceroute, ifstatus, logread), reading files (cat, head, tail), checking status (uptime, free, df, top, ip, iw, iwinfo), and any other system administration task the user requests.'
+	option watchdog_enabled '1'
+	option watchdog_max_fails '3'
+

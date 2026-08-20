@@ -345,14 +345,17 @@ return view.extend({
 		// ── Default ───────────────────────────────────────────────────────────
 		tbody.appendChild(sep('Default'));
 		var defDest, defVia, defColor;
+		var xrayOk = !!xray.running;
+		var wgOk   = !!(_state.wg || {}).connected;
+
 		if (mode === 'split' || mode === 'xray_only') {
 			defDest  = 'All other traffic';
-			defVia   = 'Xray VLESS';
-			defColor = '#2980b9';
+			defVia   = xrayOk ? 'Xray VLESS' : 'Direct (ISP) [Xray Stopped]';
+			defColor = xrayOk ? '#2980b9' : '#e74c3c';
 		} else if (mode === 'wg_only') {
 			defDest  = 'All traffic';
-			defVia   = 'WireGuard tunnel';
-			defColor = '#27ae60';
+			defVia   = wgOk ? 'WireGuard tunnel' : 'Direct (ISP) [WG Down]';
+			defColor = wgOk ? '#27ae60' : '#e74c3c';
 		} else {
 			defDest  = 'All traffic';
 			defVia   = 'Direct (ISP)';

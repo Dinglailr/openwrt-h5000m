@@ -1,0 +1,14 @@
+{
+	"luci-app-optimizer": {
+		"description": "Grant UCI access to TTL settings",
+		"read": {
+			"uci": [ "ttl" ],
+			"ubus": {
+				"luci.airouter": [ "get_ttl_status" ]
+			}
+		},
+		"write": {
+			"uci": [ "ttl" ]
+		}
+	}
+}

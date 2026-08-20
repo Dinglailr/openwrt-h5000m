@@ -10,7 +10,7 @@ var callDisable  = rpc.declare({ object:'luci.wireguard', method:'disable',     
 var callList     = rpc.declare({ object:'luci.wireguard', method:'list_profiles',     expect:{} });
 var callGet      = rpc.declare({ object:'luci.wireguard', method:'get_profile',       params:['id'],  expect:{} });
 var callSave     = rpc.declare({ object:'luci.wireguard', method:'save_profile',
-  params:['id','name','private_key','address','dns','peer_public_key','endpoint_host','endpoint_port','persistent_keepalive','preshared_key'],
+  params:['id','name','private_key','address','dns','peer_public_key','endpoint_host','endpoint_port','persistent_keepalive','preshared_key','allowed_ips'],
   expect:{} });
 var callDelete   = rpc.declare({ object:'luci.wireguard', method:'delete_profile',   params:['id'],  expect:{} });
 var callActivate = rpc.declare({ object:'luci.wireguard', method:'activate_profile', params:['id'],  expect:{} });
@@ -219,6 +219,8 @@ return view.extend({
           'Recommended: 25 seconds for NAT traversal'),
         inp('wf-psk',       'Preshared Key',         '(optional)',
           'Optional pre-shared key for additional security (PresharedKey in [Peer])'),
+        inp('wf-allowed-ips', 'Allowed IPs',         '10.0.0.0/24, 192.168.68.0/24',
+          'Comma-separated subnets to route through this tunnel. Use 0.0.0.0/0 to route all traffic.'),
 
         E('div', { class:'cbi-value' }, [
           E('div', { class:'cbi-value-field' }, [
@@ -249,8 +251,9 @@ return view.extend({
     setVal('wf-pubkey',    p.peer_public_key       || '');
     setVal('wf-endpoint',  p.endpoint_host        || '');
     setVal('wf-port',      p.endpoint_port        || '51820');
-    setVal('wf-keepalive', p.persistent_keepalive || '25');
-    setVal('wf-psk',       p.preshared_key        || '');
+    setVal('wf-keepalive',   p.persistent_keepalive                  || '25');
+    setVal('wf-psk',         p.preshared_key                         || '');
+    setVal('wf-allowed-ips', (p.allowed_ips || '10.0.0.0/24').replace(/,/g, ', '));
   },
 
   // ── Handlers ────────────────────────────────────────────────────────────
@@ -279,9 +282,10 @@ return view.extend({
     if (existing) existing.parentNode.removeChild(existing);
     var form = this.renderForm(null);
     document.getElementById('wg-profile-anchor').appendChild(form);
-    setVal('wf-port',      '51820');
-    setVal('wf-keepalive', '25');
-    setVal('wf-dns',       '1.1.1.1, 8.8.8.8');
+    setVal('wf-port',        '51820');
+    setVal('wf-keepalive',   '25');
+    setVal('wf-dns',         '1.1.1.1, 8.8.8.8');
+    setVal('wf-allowed-ips', '10.0.0.0/24');
     var el = document.getElementById('wf-name');
     if (el) el.focus();
   },
@@ -320,16 +324,17 @@ return view.extend({
       return;
     }
 
-    var port      = parseInt(val('wf-port'))      || 51820;
-    var keepalive = parseInt(val('wf-keepalive')) || 25;
-    var dns       = val('wf-dns')  || '1.1.1.1, 8.8.8.8';
-    var psk       = val('wf-psk');
+    var port       = parseInt(val('wf-port'))      || 51820;
+    var keepalive  = parseInt(val('wf-keepalive')) || 25;
+    var dns        = val('wf-dns')        || '1.1.1.1, 8.8.8.8';
+    var psk        = val('wf-psk');
+    var allowedIps = val('wf-allowed-ips') || '10.0.0.0/24';
 
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     if (msg) msg.textContent = '';
 
     var self = this;
-    return callSave(existingId || '', name, privkey, addr, dns, pubkey, endpoint, port, keepalive, psk)
+    return callSave(existingId || '', name, privkey, addr, dns, pubkey, endpoint, port, keepalive, psk, allowedIps)
       .then(function(r) {
         if (r && r.error) {
           ui.addNotification(null, E('p', [r.error]), 'danger');
