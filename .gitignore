@@ -40,3 +40,17 @@ monitor.sh
 notify_build.sh
 notify_router.sh
 start_build.sh
+
+# Build products — one canonical output directory, ignored.
+# Three near-identical firmware dirs (firmware-output/, firmware_output/,
+# firmware_out/) had accumulated 142 MB of superseded images, plus a 337 MB
+# second clone of this very repo. They were untracked, so nothing warned.
+/firmware-out/
+/firmware-output/
+/firmware_output/
+/firmware_out/
+/local-build-data/
+/firmware_ready_to_flash.bin
+/jq-linux-*
+/.build_status
+/build.log

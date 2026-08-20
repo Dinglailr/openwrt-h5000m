@@ -35,8 +35,8 @@ docker run --rm --user root \
     --exclude='staging_dir/toolchain*' \
     --exclude='build_dir' \
     --exclude='tmp' \
-    --exclude='feeds' \
-    --exclude='feeds.conf' \
+    --exclude='/feeds' \
+    --exclude='/feeds.conf' \
     --exclude='package/feeds' \
     /src/ /dest/"
 
@@ -68,22 +68,33 @@ docker run -d --name $CONT_NAME \
 
 echo "📈 Monitor: docker logs -f $CONT_NAME  OR  docker exec $CONT_NAME tail -f /openwrt/build.log"
 
-# 6. Wait for build, then extract firmware to ./firmware_out/
+# 6. Wait for build, then extract firmware to ./firmware-out/
 echo "⏳ Waiting for build to complete..."
 docker wait $CONT_NAME >/dev/null
 
-mkdir -p firmware_out
+mkdir -p firmware-out
+# Stale-artifact guard: remember when this run started, so a previous build's
+# output can never be mistaken for this one's.
+RUN_STARTED=$(date +%s)
+BUILD_VERDICT=$(docker run --rm -v "$VOL_NAME:/openwrt" $BUILDER_IMAGE cat /openwrt/.build_status 2>/dev/null | tr -d '[:space:]')
 docker run --rm --user root \
   -v "$VOL_NAME:/openwrt" \
-  -v "$(pwd)/firmware_out:/out" \
+  -v "$(pwd)/firmware-out:/out" \
   $BUILDER_IMAGE bash -c "cp /openwrt/bin/targets/mediatek/filogic/openwrt-mediatek-filogic-hiveton_h5000m-squashfs-sysupgrade.bin /out/ 2>/dev/null && echo 'COPY_OK' || echo 'COPY_FAIL'"
 
-if ls firmware_out/openwrt-mediatek-filogic-hiveton_h5000m-squashfs-sysupgrade.bin >/dev/null 2>&1; then
-    echo "🎉 SUCCESS! Firmware at: $(pwd)/firmware_out/openwrt-mediatek-filogic-hiveton_h5000m-squashfs-sysupgrade.bin"
-    ls -lh firmware_out/openwrt-mediatek-filogic-hiveton_h5000m-squashfs-sysupgrade.bin
-    osascript -e 'display notification "H5000M firmware ready in firmware_out/" with title "Build SUCCESS" sound name "Glass"' 2>/dev/null || true
+FW=firmware-out/openwrt-mediatek-filogic-hiveton_h5000m-squashfs-sysupgrade.bin
+FW_MTIME=$(stat -f %m "$FW" 2>/dev/null || echo 0)
+if [ "$BUILD_VERDICT" = "SUCCESS" ] && [ -f "$FW" ] && [ "$FW_MTIME" -ge "$RUN_STARTED" ]; then
+    echo "🎉 SUCCESS! Firmware at: $(pwd)/firmware-out/openwrt-mediatek-filogic-hiveton_h5000m-squashfs-sysupgrade.bin"
+    ls -lh firmware-out/openwrt-mediatek-filogic-hiveton_h5000m-squashfs-sysupgrade.bin
+    osascript -e 'display notification "H5000M firmware ready in firmware-out/" with title "Build SUCCESS" sound name "Glass"' 2>/dev/null || true
 else
-    echo "❌ BUILD FAILED — top errors:"
+    if [ "$BUILD_VERDICT" != "SUCCESS" ]; then
+        echo "❌ BUILD FAILED (builder reported: ${BUILD_VERDICT:-no status})"
+    elif [ "$FW_MTIME" -lt "$RUN_STARTED" ]; then
+        echo "❌ BUILD FAILED — firmware-out/ holds only a STALE image from $(date -r "$FW_MTIME" '+%Y-%m-%d %H:%M'); this run produced nothing."
+    fi
+    echo "   top errors:"
     docker run --rm --user root -v "$VOL_NAME:/openwrt" $BUILDER_IMAGE \
         bash -c 'grep -E "^ERROR:|failed to build" /openwrt/build.log | tail -5' 2>/dev/null || true
     echo "Full log: docker run --rm -v $VOL_NAME:/openwrt $BUILDER_IMAGE tail -100 /openwrt/build.log"
