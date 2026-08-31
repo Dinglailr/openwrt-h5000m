@@ -1,0 +1,373 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en\n"
+
+msgid "AdGuard Home"
+msgstr "AdGuard Home"
+
+msgid "AdGuard Home 控制中心"
+msgstr "AdGuard Home Control Center"
+
+msgid "实时状态监控 · 服务控制 · 日志查看 · 一键升级"
+msgstr "Real-time Status Monitoring · Service Control · Log Viewer · One-click Upgrade"
+
+msgid "实时仪表盘"
+msgstr "Live Dashboard"
+
+msgid "核心部署"
+msgstr "Core Deployment"
+
+msgid "核心版本"
+msgstr "Core Version"
+
+msgid "服务状态"
+msgstr "Service Status"
+
+msgid "运行状态"
+msgstr "Running Status"
+
+msgid "Web 端口"
+msgstr "Web Port"
+
+msgid "管理入口"
+msgstr "Management URL"
+
+msgid "服务控制台"
+msgstr "Service Console"
+
+msgid "版本更新"
+msgstr "Version Update"
+
+msgid "日志查看器"
+msgstr "Log Viewer"
+
+msgid "启动服务"
+msgstr "Start Service"
+
+msgid "重启服务"
+msgstr "Restart Service"
+
+msgid "停止服务"
+msgstr "Stop Service"
+
+msgid "注册系统服务"
+msgstr "Register System Service"
+
+msgid "检查更新"
+msgstr "Check Update"
+
+msgid "一键升级"
+msgstr "One-click Upgrade"
+
+msgid "刷新日志"
+msgstr "Refresh Log"
+
+msgid "执行中..."
+msgstr "Processing..."
+
+msgid "操作执行成功"
+msgstr "Operation executed successfully"
+
+msgid "操作失败: "
+msgstr "Operation failed: "
+
+msgid "未知错误"
+msgstr "Unknown error"
+
+msgid "执行异常: "
+msgstr "Execution error: "
+
+msgid "检查中..."
+msgstr "Checking..."
+
+msgid "检查失败"
+msgstr "Check failed"
+
+msgid "确认升级"
+msgstr "Confirm Upgrade"
+
+msgid "将下载并安装最新版本的 AdGuard Home 核心。升级期间服务可能短暂中断。"
+msgstr "Will download and install the latest version of AdGuard Home core. Service may be briefly interrupted during upgrade."
+
+msgid "取消"
+msgstr "Cancel"
+
+msgid "升级任务已启动，请在下方日志查看器中查看进度"
+msgstr "Upgrade task started, please check the progress in the log viewer below"
+
+msgid "升级任务启动失败"
+msgstr "Upgrade task failed to start"
+
+msgid "升级完成，正在刷新状态"
+msgstr "Upgrade completed, refreshing status"
+
+msgid "未检查"
+msgstr "Not checked"
+
+msgid "暂无日志"
+msgstr "No logs available"
+
+msgid "获取日志失败"
+msgstr "Failed to get logs"
+
+msgid "未知"
+msgstr "Unknown"
+
+msgid "服务未启动"
+msgstr "Service not started"
+
+msgid "当前控制模式："
+msgstr "Current control mode: "
+
+msgid "Init.d 系统服务级调用"
+msgstr "Init.d System Service Level"
+
+msgid "AdGuardHome 二进制直接控制（命令保底）"
+msgstr "AdGuardHome Binary Direct Control (Fallback)"
+
+msgid "当前版本："
+msgstr "Current version: "
+
+msgid "最新版本："
+msgstr "Latest version: "
+
+msgid "✔ 已下载"
+msgstr "✔ Downloaded"
+
+msgid "✖ 未发现程序 (请运行官网命令安装)"
+msgstr "✖ Not found (Please run official install command)"
+
+msgid "✔ 已安装系统服务 | ✔ 开机自启已注册"
+msgstr "✔ System service installed | ✔ Auto-start registered"
+
+msgid "⚠️ 未注册服务 (使用二进制保底控制)"
+msgstr "⚠️ Service not registered (Using binary fallback control)"
+
+msgid "强制重装"
+msgstr "Force Reinstall"
+
+msgid "下载安装"
+msgstr "Download & Install"
+
+msgid "下载安装 AdGuard Home"
+msgstr "Download & Install AdGuard Home"
+
+msgid "将从 GitHub 官方脚本下载安装 AdGuard Home 核心。安装期间请保持网络连接。"
+msgstr "Will download and install AdGuard Home core from the official GitHub script. Please keep network connection stable."
+
+msgid "确认安装"
+msgstr "Confirm Install"
+
+msgid "安装任务已启动，请在下方日志查看器中查看进度"
+msgstr "Install task started, check progress in the log viewer below"
+
+msgid "安装任务启动失败"
+msgstr "Install task failed to start"
+
+msgid "确认强制重装"
+msgstr "Confirm Force Reinstall"
+
+msgid "将强制下载在线最新版本并覆盖安装当前版本。升级期间服务将中断。"
+msgstr "Will force download and reinstall the latest version. Service will be interrupted."
+
+msgid "强制重装任务已启动，请在下方日志查看器中查看进度"
+msgstr "Force reinstall started, check progress in the log viewer below"
+
+msgid "✖ 未安装"
+msgstr "✖ Not installed"
+
+msgid "⚠️ 未注册服务"
+msgstr "⚠️ Service not registered"
+
+msgid "● 正在运行"
+msgstr "● Running"
+
+msgid "■ 已停止"
+msgstr "■ Stopped"
+
+msgid "已是最新版本"
+msgstr "Already up to date"
+
+msgid "网络代理"
+msgstr "Network Proxy"
+
+msgid "当前代理已持久化，所有检查 / 升级请求将使用此代理"
+msgstr "Current proxy is persisted and used for all check / upgrade requests"
+
+msgid "直连 (Direct)"
+msgstr "Direct"
+
+msgid "自定义..."
+msgstr "Custom..."
+
+msgid "测试"
+msgstr "Test"
+
+msgid "测试中..."
+msgstr "Testing..."
+
+msgid "已保存"
+msgstr "Saved"
+
+msgid "保存失败"
+msgstr "Save failed"
+
+msgid "可用"
+msgstr "Available"
+
+msgid "不可用"
+msgstr "Unavailable"
+
+msgid "测试失败"
+msgstr "Test failed"
+
+msgid "毫秒"
+msgstr "ms"
+
+msgid "测试所有"
+msgstr "Test All"
+
+msgid "自定义"
+msgstr "Custom"
+
+msgid "面板版本"
+msgstr "Dashboard Version"
+
+msgid "检查面板更新"
+msgstr "Check Dashboard"
+
+msgid "检查面板版本中..."
+msgstr "Checking dashboard..."
+
+msgid "升级面板"
+msgstr "Upgrade Dashboard"
+
+msgid "面板最新版本："
+msgstr "Latest: "
+
+msgid "当前面板版本："
+msgstr "Current: "
+
+msgid "面板已是最新版本"
+msgstr "Dashboard is up to date"
+
+msgid "升级面板任务已启动，请在下方日志查看器中查看进度"
+msgstr "Dashboard upgrade started, check progress in the log viewer below"
+
+msgid "确认升级面板"
+msgstr "Confirm Dashboard Upgrade"
+
+msgid "将从 GitHub 下载并部署最新版面板文件。期间 LuCI 会短暂重启。"
+msgstr "Will download and deploy the latest dashboard files from GitHub. LuCI will briefly restart."
+
+msgid "面板升级任务启动失败"
+msgstr "Dashboard upgrade failed to start"
+
+msgid "面板升级完成，正在刷新页面"
+msgstr "Dashboard upgrade completed, refreshing page"
+
+msgid "面板升级失败，已自动回滚；请检查日志与代理设置"
+msgstr "Dashboard upgrade failed and auto-rolled back; please check logs and proxy settings"
+
+msgid "升级失败，已自动回滚；请检查日志与代理设置"
+msgstr "Upgrade failed and auto-rolled back; please check logs and proxy settings"
+
+msgid "备份管理"
+msgstr "备份管理"
+
+msgid "刷新备份"
+msgstr "刷新备份"
+
+msgid "列出 /root/agh_backup_* 备份目录，可恢复或删除"
+msgstr "列出 /root/agh_backup_* 备份目录，可恢复或删除"
+
+msgid "点击「刷新备份」加载列表"
+msgstr "点击「刷新备份」加载列表"
+
+msgid "加载中..."
+msgstr "加载中..."
+
+msgid "加载失败"
+msgstr "加载失败"
+
+msgid "暂无备份目录（/root/agh_backup_*）"
+msgstr "暂无备份目录（/root/agh_backup_*）"
+
+msgid "类型"
+msgstr "类型"
+
+msgid "时间戳"
+msgstr "时间戳"
+
+msgid "文件数"
+msgstr "文件数"
+
+msgid "大小"
+msgstr "大小"
+
+msgid "含核心"
+msgstr "含核心"
+
+msgid "操作"
+msgstr "操作"
+
+msgid "安装"
+msgstr "安装"
+
+msgid "核心升级"
+msgstr "核心升级"
+
+msgid "面板升级"
+msgstr "面板升级"
+
+msgid "恢复"
+msgstr "恢复"
+
+msgid "命令"
+msgstr "命令"
+
+msgid "删除"
+msgstr "删除"
+
+msgid "是"
+msgstr "是"
+
+msgid "否"
+msgstr "否"
+
+msgid "恢复命令（在路由器 SSH 执行）："
+msgstr "恢复命令（在路由器 SSH 执行）："
+
+msgid "提示：也可点击「恢复」让面板自动后台执行"
+msgstr "提示：也可点击「恢复」让面板自动后台执行"
+
+msgid "确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。"
+msgstr "确定从备份恢复吗？当前文件将被覆盖，恢复后页面会自动刷新。"
+
+msgid "恢复中，请稍候..."
+msgstr "恢复中，请稍候..."
+
+msgid "恢复失败，请查看日志"
+msgstr "恢复失败，请查看日志"
+
+msgid "恢复失败"
+msgstr "恢复失败"
+
+msgid "确定删除此备份吗？此操作不可撤销。"
+msgstr "确定删除此备份吗？此操作不可撤销。"
+
+msgid "删除失败"
+msgstr "删除失败"
+
+msgid "网络错误"
+msgstr "网络错误"
+
+msgid "清空日志"
+msgstr "清空日志"
+
+msgid "自动刷新"
+msgstr "自动刷新"
+
+msgid "清空失败"
+msgstr "清空失败"

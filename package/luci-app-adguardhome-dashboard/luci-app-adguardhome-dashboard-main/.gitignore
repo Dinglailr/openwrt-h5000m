@@ -1,0 +1,13 @@
+.DS_Store
+
+# .trae/ 是 Trae IDE 的内部笔记/工作文档，不属于项目源码
+.trae/
+
+# .workbuddy/ 是 WorkBuddy 的本地工作记忆/项目数据，不属于项目源码，
+# 不应上传到 GitHub 仓库。
+.workbuddy/
+
+# changes_package/ 是路由器本地临时部署/测试包，仅供手动 scp 到路由器配合
+# deploy_atomic.sh 使用；面板自升级上线后改走「面板内检查面板更新 → 升级面板」
+# 在线完成，本目录无需保留在 GitHub 仓库。
+changes_package/

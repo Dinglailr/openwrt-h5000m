@@ -1,0 +1,6 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# 二进制文件：禁止任何换行符规范化，防止 magic 字节被破坏
+*.lmo binary
+*.lmo -diff
