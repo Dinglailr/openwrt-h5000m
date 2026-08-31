@@ -57,6 +57,18 @@ jobs:
     - name: Expand .config
       run: make defconfig
 
+    - name: Customize config
+      run: |
+        echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
+        echo "CONFIG_PACKAGE_open-app-filter=y" >> .config
+        echo "CONFIG_PACKAGE_oaf=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-harbor-file=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-homeproxy=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-localclash=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-qmodem-generic=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-adguardhome-dashboard=y" >> .config
+        make defconfig
+
     - name: Download sources
       run: make download -j$(nproc) V=s 2>&1 | grep -E "^(ERROR|WARNING)" || true
 
