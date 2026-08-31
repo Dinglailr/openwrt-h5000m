@@ -59,14 +59,47 @@ jobs:
 
     - name: Customize config
       run: |
+        # ===== 应用过滤与文件管理 =====
         echo "CONFIG_PACKAGE_luci-app-oaf=y" >> .config
         echo "CONFIG_PACKAGE_open-app-filter=y" >> .config
         echo "CONFIG_PACKAGE_oaf=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-harbor-file=y" >> .config
+
+        # ===== HomeProxy 及其核心 =====
         echo "CONFIG_PACKAGE_luci-app-homeproxy=y" >> .config
+        echo "CONFIG_PACKAGE_sing-box=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-netlink-diag=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
+        echo "CONFIG_PACKAGE_firewall4=y" >> .config
+
+        # ===== LocalClash 及其核心 =====
         echo "CONFIG_PACKAGE_luci-app-localclash=y" >> .config
+        echo "CONFIG_PACKAGE_mihomo=y" >> .config
+        echo "CONFIG_PACKAGE_ip-full=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
+
+        # ===== Nikki 及其核心 =====
+        echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
+        echo "CONFIG_PACKAGE_nikki=y" >> .config
+        # Nikki 共用 mihomo 核心，已在上方勾选，无需重复
+
+        # ===== QModem 通用界面 =====
         echo "CONFIG_PACKAGE_luci-app-qmodem-generic=y" >> .config
+
+        # ===== AdGuardHome 优化版 =====
         echo "CONFIG_PACKAGE_luci-app-adguardhome-dashboard=y" >> .config
+
+        # ===== Docker 相关 =====
+        # Docker 核心组件
+        echo "CONFIG_PACKAGE_dockerd=y" >> .config
+        echo "CONFIG_PACKAGE_docker=y" >> .config
+        # Docker 管理界面
+        echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
+        echo "CONFIG_PACKAGE_luci-lib-docker=y" >> .config
+        # Docker Compose（可选，但推荐加上）
+        echo "CONFIG_PACKAGE_docker-compose=y" >> .config
+
+        # ===== 处理依赖关系 =====
         make defconfig
 
     - name: Download sources
